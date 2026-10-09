@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="color-scheme" content="dark">
+  <title>Ghostline</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main id="landing" class="landing" hidden>
+    <h1>Ghostline</h1>
+    <p class="lead">Private chat, voice and video between two people. No accounts, no history, nothing stored.</p>
+    <button id="createBtn" class="primary big">Create private room</button>
+    <ul class="facts">
+      <li>Messages and calls go directly between the two devices, end-to-end encrypted.</li>
+      <li>The room key exists only inside the invite link. The server never sees it.</li>
+      <li>Close or refresh the tab and the conversation is gone for good.</li>
+    </ul>
+    <p class="warn">Important: no website can protect you from spyware that is already installed on your phone and can
+      record the screen, keyboard or microphone. For best results, use a private/incognito tab on a device you trust.</p>
+  </main>
+
+  <section id="room" class="room" hidden>
+    <header class="bar">
+      <div class="status"><span id="dot" class="dot"></span><span id="statusText">Connecting…</span></div>
+      <div class="actions">
+        <button id="voiceBtn" disabled>Voice</button>
+        <button id="videoBtn" disabled>Video</button>
+        <button id="inviteBtn">Invite</button>
+        <button id="leaveBtn" class="danger">Leave</button>
+      </div>
+    </header>
+
+    <div id="invite" class="panel" hidden>
+      <p>Send this link to <strong>one</strong> person over a channel you trust. Anyone with the link can join (max 2 people).</p>
+      <div class="row">
+        <input id="inviteLink" readonly autocomplete="off" spellcheck="false">
+        <button id="copyBtn">Copy</button>
+      </div>
+    </div>
+
+    <div id="safetyBox" class="safety">
+      Safety code: <strong id="safety">—</strong>
+      <button id="verifyBtn" class="verify" type="button" hidden>Mark verified</button>
+      <span class="verified-tag">✓ verified</span>
+      <span class="hint">Read it out loud on a call. If both screens match, nobody is listening in the middle.
+        Once verified, you'll be warned if it ever changes.</span>
+    </div>
+
+    <div id="incoming" class="panel incoming" hidden>
+      <span id="incomingText">Incoming call</span>
+      <div class="row">
+        <button id="acceptVoiceBtn" class="primary">Answer voice</button>
+        <button id="acceptVideoBtn" class="primary">Answer video</button>
+        <button id="declineBtn" class="danger">Decline</button>
+      </div>
+    </div>
+
+    <div id="call" class="call" hidden>
+      <video id="remoteVideo" autoplay playsinline></video>
+      <div id="avatar" class="avatar"><span id="callLabel">Calling…</span></div>
+      <video id="localVideo" autoplay playsinline muted></video>
+      <div class="controls">
+        <button id="micBtn">Mute</button>
+        <button id="camBtn">Camera on</button>
+        <button id="flipBtn" hidden>Flip</button>
+        <button id="hangupBtn" class="danger">Hang up</button>
+      </div>
+    </div>
+
+    <div id="messages" class="messages" aria-live="polite"></div>
+
+    <form id="composer" class="composer">
+      <select id="ttl" title="Disappearing messages">
+        <option value="0">Keep</option>
+        <option value="30">30s</option>
+        <option value="300">5m</option>
+        <option value="3600">1h</option>
+      </select>
+      <input id="msgInput" placeholder="Message" maxlength="4000" disabled
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <button id="sendBtn" class="primary" disabled>Send</button>
+      <button id="clearBtn" type="button" title="Clear chat on both sides">Clear</button>
+    </form>
+  </section>
+</body>
+</html>

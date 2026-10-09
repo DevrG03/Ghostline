@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: ghostline
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
