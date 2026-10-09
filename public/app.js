@@ -424,54 +424,69 @@ const IN_APP_BROWSER = /FBAN|FBAV|Instagram|WhatsApp|Snapchat|Line\/|Telegram|; 
 
 function mediaErrorText(err) {
   const name = err?.name || 'Error';
+  const device = err?.device || 'microphone/camera';
   const hints = {
     NotAllowedError: IN_APP_BROWSER
       ? 'This in-app browser blocks the microphone/camera. Paste the invite link into Safari or Chrome instead.'
-      : 'Permission was blocked. Allow microphone/camera for this site (tap the icon next to the address), ' +
-        'and check that your phone\'s Settings allow the browser app to use them. ' +
+      : `Permission was blocked. Allow the ${device} for this site (tap the icon next to the address), ` +
+        'and check that your device\'s settings allow the browser app to use it. ' +
         'If you opened the link inside another app, paste it into Safari or Chrome instead.',
-    NotReadableError: 'The microphone or camera is busy. Close other apps or tabs using it ' +
-      '(a call app, or Ghostline open in another tab on this phone) and try again.',
-    NotFoundError: 'No microphone or camera was found on this device.',
+    NotReadableError: `The browser has permission but the ${device} couldn't be opened, usually because ` +
+      'something else holds it: a call, a voice assistant ("Hey Google"/Siri), a screen recorder, a ' +
+      'Bluetooth headset, or (iPhone near a Mac) Continuity Camera. Fully close and reopen the browser, ' +
+      'then try again. On a computer, quit apps like Zoom, Teams or FaceTime.',
+    NotFoundError: `No ${device} was found on this device.`,
     OverconstrainedError: 'The camera doesn\'t support the requested settings.',
-    SecurityError: 'Microphone and camera are blocked on this page by the browser.',
-    AbortError: 'The browser stopped the microphone/camera from starting. Try again.',
+    SecurityError: `The ${device} is blocked on this page by the browser.`,
+    AbortError: `The browser stopped the ${device} from starting. Try again.`,
     TypeError: 'This browser can\'t make calls. Open the link in Safari or Chrome.',
   };
-  return `Could not start the microphone/camera (${name}). ${hints[name] || 'Try again or use another browser.'}`;
+  const detail = err?.message ? `: ${String(err.message).slice(0, 120)}` : '';
+  return `Could not start the ${device} (${name}${detail}). ${hints[name] || 'Try again or use another browser.'}`;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const isDenied = (err) => err?.name === 'NotAllowedError' || err?.name === 'SecurityError';
+
+// Try each set of constraints in turn. A busy device sometimes frees up a moment later.
+async function capture(attempts, device) {
+  let lastErr;
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      lastErr = err;
+      if (isDenied(err)) break; // a denied permission won't change on retry
+      if (err.name === 'NotReadableError') await sleep(600);
+    }
+  }
+  lastErr.device = device;
+  throw lastErr;
 }
 
 async function getMedia(video) {
   if (!navigator.mediaDevices?.getUserMedia) throw new TypeError('getUserMedia unavailable');
   const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-  const attempts = video
-    ? [
-      { audio, video: { facingMode: state.facing, width: { ideal: 1280 }, height: { ideal: 720 } } },
-      { audio: true, video: true }, // simpler constraints for picky phone cameras
-    ]
-    : [{ audio }, { audio: true }];
-  let lastErr;
-  for (const constraints of attempts) {
+  let stream;
+  if (video) {
     try {
-      state.local = await navigator.mediaDevices.getUserMedia(constraints);
-      state.myVideo = video;
-      $('localVideo').srcObject = state.local;
-      return;
+      stream = await capture([
+        { audio, video: { facingMode: state.facing, width: { ideal: 1280 }, height: { ideal: 720 } } },
+        { audio: true, video: true }, // simpler constraints for picky phone cameras
+      ], 'microphone/camera');
     } catch (err) {
-      lastErr = err;
-      // A denied permission won't change on retry, so don't ask again.
-      if (err.name === 'NotAllowedError' || err.name === 'SecurityError') break;
+      if (isDenied(err)) throw err;
+      // Find out which device is the problem: if the microphone works alone, it's the camera.
+      stream = await capture([{ audio }, { audio: true }], 'microphone');
+      sysMsg(`Camera unavailable (${err.name}${err.message ? ': ' + err.message : ''}), continuing with voice only.`);
+      video = false;
     }
+  } else {
+    stream = await capture([{ audio }, { audio: true }, { audio: true }], 'microphone');
   }
-  if (video && lastErr?.name !== 'NotAllowedError' && lastErr?.name !== 'SecurityError') {
-    // Camera unavailable but the microphone may still work: fall back to voice.
-    try {
-      await getMedia(false);
-      sysMsg(`Camera unavailable (${lastErr?.name}), continuing with voice only.`);
-      return;
-    } catch {}
-  }
-  throw lastErr;
+  state.local = stream;
+  state.myVideo = video;
+  $('localVideo').srcObject = state.local;
 }
 
 // Reuse existing transceivers so repeated calls don't grow the connection.
