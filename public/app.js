@@ -418,13 +418,60 @@ function onPeerMessage(m) {
 
 // ---------- calls ----------
 
+// In-app browsers (WhatsApp, Instagram, Facebook, Telegram, Android WebViews…) often block
+// the microphone and camera even when permission appears to be granted.
+const IN_APP_BROWSER = /FBAN|FBAV|Instagram|WhatsApp|Snapchat|Line\/|Telegram|; wv\)/i.test(navigator.userAgent);
+
+function mediaErrorText(err) {
+  const name = err?.name || 'Error';
+  const hints = {
+    NotAllowedError: IN_APP_BROWSER
+      ? 'This in-app browser blocks the microphone/camera. Paste the invite link into Safari or Chrome instead.'
+      : 'Permission was blocked. Allow microphone/camera for this site (tap the icon next to the address), ' +
+        'and check that your phone\'s Settings allow the browser app to use them. ' +
+        'If you opened the link inside another app, paste it into Safari or Chrome instead.',
+    NotReadableError: 'The microphone or camera is busy. Close other apps or tabs using it ' +
+      '(a call app, or Ghostline open in another tab on this phone) and try again.',
+    NotFoundError: 'No microphone or camera was found on this device.',
+    OverconstrainedError: 'The camera doesn\'t support the requested settings.',
+    SecurityError: 'Microphone and camera are blocked on this page by the browser.',
+    AbortError: 'The browser stopped the microphone/camera from starting. Try again.',
+    TypeError: 'This browser can\'t make calls. Open the link in Safari or Chrome.',
+  };
+  return `Could not start the microphone/camera (${name}). ${hints[name] || 'Try again or use another browser.'}`;
+}
+
 async function getMedia(video) {
-  state.local = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    video: video ? { facingMode: state.facing, width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-  });
-  state.myVideo = video;
-  $('localVideo').srcObject = state.local;
+  if (!navigator.mediaDevices?.getUserMedia) throw new TypeError('getUserMedia unavailable');
+  const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  const attempts = video
+    ? [
+      { audio, video: { facingMode: state.facing, width: { ideal: 1280 }, height: { ideal: 720 } } },
+      { audio: true, video: true }, // simpler constraints for picky phone cameras
+    ]
+    : [{ audio }, { audio: true }];
+  let lastErr;
+  for (const constraints of attempts) {
+    try {
+      state.local = await navigator.mediaDevices.getUserMedia(constraints);
+      state.myVideo = video;
+      $('localVideo').srcObject = state.local;
+      return;
+    } catch (err) {
+      lastErr = err;
+      // A denied permission won't change on retry, so don't ask again.
+      if (err.name === 'NotAllowedError' || err.name === 'SecurityError') break;
+    }
+  }
+  if (video && lastErr?.name !== 'NotAllowedError' && lastErr?.name !== 'SecurityError') {
+    // Camera unavailable but the microphone may still work: fall back to voice.
+    try {
+      await getMedia(false);
+      sysMsg(`Camera unavailable (${lastErr?.name}), continuing with voice only.`);
+      return;
+    } catch {}
+  }
+  throw lastErr;
 }
 
 // Reuse existing transceivers so repeated calls don't grow the connection.
@@ -447,9 +494,11 @@ async function startCall(video) {
   if (state.call !== 'idle' || !dcOpen()) return;
   try {
     await getMedia(video);
-  } catch {
-    return sysMsg('Could not access the microphone or camera.');
+  } catch (err) {
+    console.error(err);
+    return sysMsg(mediaErrorText(err));
   }
+  video = state.myVideo;
   state.call = 'outgoing';
   sendPeer({ t: 'ring', video });
   renderCall();
@@ -459,10 +508,12 @@ async function acceptCall(video) {
   if (state.call !== 'incoming') return;
   try {
     await getMedia(video);
-  } catch {
-    sysMsg('Could not access the microphone or camera.');
+  } catch (err) {
+    console.error(err);
+    sysMsg(mediaErrorText(err));
     return declineCall();
   }
+  video = state.myVideo;
   state.call = 'active';
   await attachTracks();
   sendPeer({ t: 'accept', video });
@@ -504,8 +555,8 @@ async function toggleCam() {
       state.local.addTrack(cam);
       $('localVideo').srcObject = state.local;
       if (state.call === 'active') await attachTracks();
-    } catch {
-      return sysMsg('Could not access the camera.');
+    } catch (err) {
+      return sysMsg(mediaErrorText(err));
     }
     state.myVideo = true;
   } else {
@@ -568,6 +619,10 @@ async function enterRoom(secret, showInvite = false) {
   $('room').hidden = false;
   $('inviteLink').value = inviteLink();
   $('invite').hidden = !showInvite;
+  if (IN_APP_BROWSER) {
+    sysMsg('⚠ You seem to be inside another app\'s browser. Calls may not work here. ' +
+      'For voice and video, copy the original invite link and paste it into Safari or Chrome.');
+  }
   connectSignaling();
 }
 
