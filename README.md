@@ -3,6 +3,9 @@
 Private chat, voice and video between two people: in the browser, or with the Android app
 in [android/](android/).
 
+> The complete source of every file is also collected in one place, verbatim, in
+> [SOURCE.md](SOURCE.md).
+
 ## Run locally
 
     npm install
