@@ -13,6 +13,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
+import org.webrtc.Camera2Enumerator
+import org.webrtc.CameraVideoCapturer
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -26,6 +28,8 @@ import org.webrtc.RtpReceiver
 import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.SurfaceTextureHelper
+import org.webrtc.VideoSource
 import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 import org.webrtc.audio.JavaAudioDeviceModule
@@ -46,6 +50,7 @@ interface SessionUi {
     fun onReady(ready: Boolean)
     fun onCall(state: CallState)
     fun onPeerVideo(on: Boolean)
+    fun onLocalVideo(on: Boolean, frontCamera: Boolean)
 }
 
 // One room. Speaks the same protocol as public/app.js: encrypted signaling through the
@@ -57,9 +62,11 @@ class Session(
     val invite: Invite,
     private val ui: SessionUi,
     private val audio: CallAudio,
-    egl: EglBase,
+    private val egl: EglBase,
     private val remoteSink: VideoSink,
+    private val localSink: VideoSink,
 ) {
+    private val appContext = context.applicationContext
     private val keys = RoomKeys(invite.secret)
     private val main = Handler(Looper.getMainLooper())
     private val exec = Executors.newSingleThreadExecutor()
@@ -107,6 +114,11 @@ class Session(
     private var call = CallState.IDLE
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
+    private var camera: CameraVideoCapturer? = null
+    private var cameraHelper: SurfaceTextureHelper? = null
+    private var videoSource: VideoSource? = null
+    private var videoTrack: VideoTrack? = null
+    private var frontCamera = true
     private var code: String? = null
 
     // ---------- public API (any thread) ----------
@@ -123,8 +135,15 @@ class Session(
     }
 
     fun clearChat() = post { sendPeer(JSONObject().put("t", "clear")) }
-    fun startCall() = post { startCallNow() }
-    fun acceptCall() = post { acceptCallNow() }
+    fun startCall(video: Boolean) = post { startCallNow(video) }
+    fun acceptCall(video: Boolean) = post { acceptCallNow(video) }
+    fun setCamera(on: Boolean) = post { setCameraNow(on) }
+    fun flipCamera() = post {
+        val cam = camera ?: return@post
+        cam.switchCamera(null)
+        frontCamera = !frontCamera
+        ui { onLocalVideo(true, frontCamera) }
+    }
     fun declineCall() = post { declineCallNow() }
     fun hangUp() = post { endCall(true) }
 
@@ -525,37 +544,107 @@ class Session(
     // Reuse existing transceivers so repeated calls don't grow the connection (like the web app).
     private fun attachTracks() {
         val p = pc ?: return
-        val track = audioTrack ?: return
-        val free = p.transceivers.firstOrNull {
-            it.mediaType == org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO &&
-                it.sender.track() == null && !it.isStopped
-        }
-        if (free != null) {
-            free.sender.setTrack(track, false)
-            free.sender.setStreams(listOf("ghostline"))
-            if (free.direction != RtpTransceiver.RtpTransceiverDirection.SEND_RECV) {
-                free.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+        for (track in listOfNotNull(audioTrack, videoTrack)) {
+            if (p.senders.any { it.track() === track }) continue
+            val type = if (track is VideoTrack) {
+                org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO
+            } else {
+                org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO
             }
-        } else if (p.senders.none { it.track() === track }) {
-            p.addTrack(track, listOf("ghostline"))
+            val free = p.transceivers.firstOrNull { it.mediaType == type && it.sender.track() == null && !it.isStopped }
+            if (free != null) {
+                free.sender.setTrack(track, false)
+                free.sender.setStreams(listOf("ghostline"))
+                if (free.direction != RtpTransceiver.RtpTransceiverDirection.SEND_RECV) {
+                    free.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+                }
+            } else {
+                p.addTrack(track, listOf("ghostline"))
+            }
         }
     }
 
-    private fun startCallNow() {
+    // The camera only runs while it's on; turning it off releases it (and its light).
+    private fun startCamera(): Boolean {
+        if (videoTrack != null) return true
+        return try {
+            val cams = Camera2Enumerator(appContext)
+            val name = cams.deviceNames.firstOrNull { cams.isFrontFacing(it) == frontCamera }
+                ?: cams.deviceNames.firstOrNull() ?: return false
+            frontCamera = cams.isFrontFacing(name)
+            val cap = cams.createCapturer(name, null) ?: return false
+            val helper = SurfaceTextureHelper.create("ghostline-camera", egl.eglBaseContext)
+            val source = factory.createVideoSource(false)
+            cap.initialize(helper, appContext, source.capturerObserver)
+            cap.startCapture(1280, 720, 30)
+            val track = factory.createVideoTrack("ghostline-video", source)
+            track.addSink(localSink)
+            camera = cap
+            cameraHelper = helper
+            videoSource = source
+            videoTrack = track
+            ui { onLocalVideo(true, frontCamera) }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "camera failed", e)
+            stopCamera()
+            false
+        }
+    }
+
+    private fun stopCamera() {
+        val track = videoTrack
+        if (track != null) pc?.senders?.forEach { if (it.track() === track) it.setTrack(null, false) }
+        track?.removeSink(localSink)
+        try {
+            camera?.stopCapture()
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        camera?.dispose()
+        track?.dispose()
+        videoSource?.dispose()
+        cameraHelper?.dispose()
+        camera = null
+        cameraHelper = null
+        videoSource = null
+        videoTrack = null
+        ui { onLocalVideo(false, frontCamera) }
+    }
+
+    private fun setCameraNow(on: Boolean) {
+        if (call == CallState.IDLE || call == CallState.INCOMING) return
+        if (on) {
+            if (!startCamera()) {
+                system("Could not start the camera.")
+                return
+            }
+            if (call == CallState.ACTIVE) attachTracks()
+        } else {
+            stopCamera()
+        }
+        sendPeer(JSONObject().put("t", "video").put("on", on))
+    }
+
+    private fun startCallNow(wantVideo: Boolean) {
         if (call != CallState.IDLE || !dcOpen()) return
         ensureMic()
+        val video = wantVideo && startCamera()
+        if (wantVideo && !video) system("Could not start the camera, calling with voice only.")
         main.post { audio.start() }
         setCall(CallState.OUTGOING)
-        sendPeer(JSONObject().put("t", "ring").put("video", false))
+        sendPeer(JSONObject().put("t", "ring").put("video", video))
     }
 
-    private fun acceptCallNow() {
+    private fun acceptCallNow(wantVideo: Boolean) {
         if (call != CallState.INCOMING) return
         ensureMic()
+        val video = wantVideo && startCamera()
+        if (wantVideo && !video) system("Could not start the camera, answering with voice only.")
         main.post { audio.start() }
         setCall(CallState.ACTIVE)
         attachTracks()
-        sendPeer(JSONObject().put("t", "accept").put("video", false))
+        sendPeer(JSONObject().put("t", "accept").put("video", video))
     }
 
     private fun declineCallNow() {
@@ -567,6 +656,7 @@ class Session(
         if (notify && call != CallState.IDLE) {
             sendPeer(JSONObject().put("t", if (call == CallState.OUTGOING) "cancel" else "end"))
         }
+        stopCamera()
         pc?.senders?.forEach { if (it.track() != null) it.setTrack(null, false) }
         audioTrack?.dispose()
         audioSource?.dispose()

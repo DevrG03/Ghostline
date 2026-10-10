@@ -2,6 +2,7 @@ package app.ghostline
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
@@ -20,11 +21,14 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
@@ -41,9 +45,15 @@ class MainActivity : Activity(), SessionUi {
     private lateinit var audio: CallAudio
     private lateinit var egl: EglBase
     private var remoteView: SurfaceViewRenderer? = null
+    private var localView: SurfaceViewRenderer? = null
+    private lateinit var videoArea: FrameLayout // full-screen layer for video calls
+    private lateinit var videoLabel: TextView
+    private lateinit var controls: LinearLayout // call buttons; moved between the voice panel and video layer
+    private var fullScreen = false
+    private var fillVideo = true
+    private var myVideo = false
     private var peerVideo = false
     private var callState = CallState.IDLE
-    private var pendingMicAction: (() -> Unit)? = null
     private var verifiedCode: String? = null
     private var currentCode: String? = null
     private var ready = false
@@ -53,6 +63,9 @@ class MainActivity : Activity(), SessionUi {
     private lateinit var statusText: TextView
     private lateinit var dot: View
     private lateinit var voiceBtn: Button
+    private lateinit var videoBtn: Button
+    private lateinit var camBtn: Button
+    private lateinit var flipBtn: Button
     private lateinit var invitePanel: LinearLayout
     private lateinit var safetyText: TextView
     private lateinit var verifyBtn: Button
@@ -93,7 +106,17 @@ class MainActivity : Activity(), SessionUi {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (session != null) leaveRoom() else @Suppress("DEPRECATION") super.onBackPressed()
+        if (session == null) {
+            @Suppress("DEPRECATION") super.onBackPressed()
+            return
+        }
+        // One accidental back swipe shouldn't end the call and lose the room.
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(if (callState == CallState.IDLE) "Leave the room?" else "End the call and leave?")
+            .setMessage("The chat is deleted, and you'll need the invite link to rejoin.")
+            .setPositiveButton("Leave") { _, _ -> leaveRoom() }
+            .setNegativeButton("Stay", null)
+            .show()
     }
 
     // ---------- home ----------
@@ -153,9 +176,10 @@ class MainActivity : Activity(), SessionUi {
         ready = false
         muted = false
         peerVideo = false
+        myVideo = false
         callState = CallState.IDLE
         buildRoom(invite, showInvite)
-        session = Session(this, invite, this, audio, egl, remoteView!!).also { it.start() }
+        session = Session(this, invite, this, audio, egl, remoteView!!, localView!!).also { it.start() }
     }
 
     private fun leaveRoom(showHomeAfter: Boolean = true) {
@@ -165,6 +189,10 @@ class MainActivity : Activity(), SessionUi {
         s.close()
         remoteView?.release()
         remoteView = null
+        localView?.release()
+        localView = null
+        setFullScreen(false)
+        fullScreen = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (showHomeAfter) showHome(null)
     }
@@ -181,8 +209,10 @@ class MainActivity : Activity(), SessionUi {
         statusRow.addView(statusText)
         bar.addView(statusRow)
         val actions = row().spaced(8, 0)
-        voiceBtn = button("Voice call") { withMic { session?.startCall() } }.apply { isEnabled = false }
+        voiceBtn = button("Voice") { withPermissions(video = false) { session?.startCall(false) } }.apply { isEnabled = false }
         actions.addView(voiceBtn, weighted())
+        videoBtn = button("Video") { withPermissions(video = true) { cam -> session?.startCall(cam) } }.apply { isEnabled = false }
+        actions.addView(videoBtn, weighted())
         actions.addView(button("Invite") { invitePanel.visibility = if (invitePanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE }, weighted())
         actions.addView(button("Leave", danger = true) { leaveRoom() }, weighted())
         bar.addView(actions)
@@ -224,25 +254,25 @@ class MainActivity : Activity(), SessionUi {
             background = rounded(SURFACE, 12, ACCENT)
             addView(text("Incoming call", 16f, TEXT, bold = true))
             val r = row().spaced(8, 0)
-            r.addView(button("Answer", primary = true) { withMic(onDenied = { session?.declineCall() }) { session?.acceptCall() } }, weighted())
+            r.addView(button("Voice", primary = true) {
+                withPermissions(video = false, onDenied = { session?.declineCall() }) { session?.acceptCall(false) }
+            }, weighted())
+            r.addView(button("Video", primary = true) {
+                withPermissions(video = true, onDenied = { session?.declineCall() }) { cam -> session?.acceptCall(cam) }
+            }, weighted())
             r.addView(button("Decline", danger = true) { session?.declineCall() }, weighted())
             addView(r)
         }
         root.addView(incomingPanel, margins(12))
 
-        // active / outgoing call
+        // active / outgoing voice call (compact panel above the chat)
         callPanel = column(pad = 12).apply {
             visibility = View.GONE
             background = rounded(Color.BLACK, 12)
-            remoteView = SurfaceViewRenderer(this@MainActivity).apply {
-                init(egl.eglBaseContext, null)
-                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-                setEnableHardwareScaler(true)
-                visibility = View.GONE
-            }
-            addView(remoteView, LinearLayout.LayoutParams(MATCH_PARENT, dp(260)).apply { bottomMargin = dp(8) })
             callLabel = text("Calling…", 16f, TEXT, bold = true).apply { gravity = Gravity.CENTER }
             addView(callLabel, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        }
+        controls = column(pad = 0).apply {
             val r = row().spaced(8, 0)
             muteBtn = button("Mute") {
                 muted = !muted
@@ -256,8 +286,48 @@ class MainActivity : Activity(), SessionUi {
             r.addView(speakerBtn, weighted())
             r.addView(button("Hang up", danger = true) { session?.hangUp() }, weighted())
             addView(r)
+            val r2 = row().spaced(6, 0)
+            camBtn = button("Camera on") {
+                if (myVideo) session?.setCamera(false) else withPermissions(video = true) { cam -> if (cam) session?.setCamera(true) }
+            }
+            r2.addView(camBtn, weighted())
+            flipBtn = button("Flip") { session?.flipCamera() }.apply { isEnabled = false }
+            r2.addView(flipBtn, weighted())
+            addView(r2)
         }
+        callPanel.addView(controls)
         root.addView(callPanel, margins(12))
+
+        // video call: the other person fills the screen, you're in the corner
+        videoArea = FrameLayout(this).apply {
+            visibility = View.GONE
+            setBackgroundColor(Color.BLACK)
+        }
+        remoteView = SurfaceViewRenderer(this).apply {
+            init(egl.eglBaseContext, null)
+            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+            setEnableHardwareScaler(true)
+            visibility = View.GONE
+            // tap to switch between filling the screen and showing the whole picture
+            setOnClickListener {
+                fillVideo = !fillVideo
+                setScalingType(if (fillVideo) RendererCommon.ScalingType.SCALE_ASPECT_FILL else RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            }
+        }
+        videoArea.addView(remoteView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        localView = SurfaceViewRenderer(this).apply {
+            init(egl.eglBaseContext, null)
+            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+            setZOrderMediaOverlay(true) // draw the self-view above the other person's video
+            setMirror(true)
+            visibility = View.GONE
+        }
+        videoArea.addView(localView, cornerParams())
+        videoLabel = text("Video call", 15f, Color.WHITE, bold = true).apply {
+            setShadowLayer(6f, 0f, 1f, Color.BLACK)
+            setPadding(dp(16), dp(44), dp(16), dp(16))
+        }
+        videoArea.addView(videoLabel, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.TOP or Gravity.START))
 
         // messages
         messages = column(pad = 12)
@@ -285,7 +355,11 @@ class MainActivity : Activity(), SessionUi {
         })
         root.addView(composer)
 
-        setContentView(root.apply { setBackgroundColor(BG) })
+        setContentView(FrameLayout(this).apply {
+            setBackgroundColor(BG)
+            addView(root, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(videoArea, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        })
     }
 
     private fun send() {
@@ -305,26 +379,37 @@ class MainActivity : Activity(), SessionUi {
         toast("Copied")
     }
 
-    private fun withMic(onDenied: (() -> Unit)? = null, action: () -> Unit) {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            action()
+    // Ask for the microphone (and the camera for video). The action gets whether the camera
+    // may be used, so a video call falls back to voice if only the camera is refused.
+    private fun withPermissions(video: Boolean, onDenied: (() -> Unit)? = null, action: (camera: Boolean) -> Unit) {
+        val wanted = listOfNotNull(Manifest.permission.RECORD_AUDIO, if (video) Manifest.permission.CAMERA else null)
+        val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) {
+            action(video)
             return
         }
-        pendingMicAction = action
-        pendingMicDenied = onDenied
-        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+        pendingAction = action
+        pendingDenied = onDenied
+        pendingVideo = video
+        requestPermissions(missing.toTypedArray(), 1)
     }
 
-    private var pendingMicDenied: (() -> Unit)? = null
+    private var pendingAction: ((Boolean) -> Unit)? = null
+    private var pendingDenied: (() -> Unit)? = null
+    private var pendingVideo = false
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        if (granted) pendingMicAction?.invoke() else {
+        val granted = { p: String -> checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED }
+        if (granted(Manifest.permission.RECORD_AUDIO)) {
+            val camera = pendingVideo && granted(Manifest.permission.CAMERA)
+            if (pendingVideo && !camera) onSystem("Camera permission was refused, so this call is voice only.")
+            pendingAction?.invoke(camera)
+        } else {
             onSystem("Microphone permission is needed for calls.")
-            pendingMicDenied?.invoke()
+            pendingDenied?.invoke()
         }
-        pendingMicAction = null
-        pendingMicDenied = null
+        pendingAction = null
+        pendingDenied = null
     }
 
     // ---------- SessionUi ----------
@@ -387,7 +472,8 @@ class MainActivity : Activity(), SessionUi {
         this.ready = ready
         input.isEnabled = ready
         sendBtn.isEnabled = ready
-        voiceBtn.isEnabled = ready && callPanel.visibility == View.GONE && incomingPanel.visibility == View.GONE
+        voiceBtn.isEnabled = ready && callState == CallState.IDLE
+        videoBtn.isEnabled = voiceBtn.isEnabled
         if (ready) invitePanel.visibility = View.GONE // don't leave the room key on screen
     }
 
@@ -397,23 +483,90 @@ class MainActivity : Activity(), SessionUi {
         renderVideo()
     }
 
+    override fun onLocalVideo(on: Boolean, frontCamera: Boolean) {
+        if (session == null) return
+        myVideo = on
+        localView?.setMirror(frontCamera)
+        renderVideo()
+    }
+
     private fun renderVideo() {
-        val show = peerVideo && callState == CallState.ACTIVE
-        remoteView?.visibility = if (show) View.VISIBLE else View.GONE
-        callLabel.text = when {
-            callState == CallState.OUTGOING -> "Calling…"
-            show -> "Video call (your camera stays off in this app)"
-            else -> "Voice call"
+        val inCall = callState == CallState.OUTGOING || callState == CallState.ACTIVE
+        val remote = peerVideo && callState == CallState.ACTIVE
+        val local = myVideo && inCall
+        remoteView?.visibility = if (remote) View.VISIBLE else View.GONE
+        localView?.visibility = if (local) View.VISIBLE else View.GONE
+        // Until the other person's video arrives, your own camera fills the screen.
+        localView?.layoutParams = if (remote) cornerParams() else FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+        setFullScreen(inCall && (remote || local))
+        callPanel.visibility = if (inCall && !fullScreen) View.VISIBLE else View.GONE
+        val label = if (callState == CallState.OUTGOING) "Calling…" else if (fullScreen) "Video call" else "Voice call"
+        callLabel.text = label
+        videoLabel.text = label
+        camBtn.text = if (myVideo) "Camera off" else "Camera on"
+        flipBtn.isEnabled = myVideo
+    }
+
+    // Move the call buttons into the full-screen video layer (or back) and hide the system bars.
+    @Suppress("DEPRECATION")
+    private fun setFullScreen(on: Boolean) {
+        if (on == fullScreen) return
+        fullScreen = on
+        (controls.parent as? android.view.ViewGroup)?.removeView(controls)
+        if (on) {
+            controls.setPadding(dp(12), dp(12), dp(12), dp(24))
+            controls.background = GradientDrawable(
+                GradientDrawable.Orientation.BOTTOM_TOP,
+                intArrayOf(Color.argb(200, 0, 0, 0), Color.TRANSPARENT),
+            )
+            videoArea.addView(controls, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
+        } else {
+            controls.setPadding(0, 0, 0, 0)
+            controls.background = null
+            callPanel.addView(controls)
         }
+        videoArea.visibility = if (on) View.VISIBLE else View.GONE
+        // Let the video run into the camera-cutout strip at the top while full screen.
+        if (Build.VERSION.SDK_INT >= 28) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = if (on) {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                } else {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                }
+            }
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(!on) // draw under the (hidden) bars and the cutout
+            window.insetsController?.let { c ->
+                if (on) {
+                    c.hide(WindowInsets.Type.systemBars())
+                    c.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                } else {
+                    c.show(WindowInsets.Type.systemBars())
+                }
+            }
+        } else {
+            window.decorView.systemUiVisibility = if (on) {
+                View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            } else {
+                0
+            }
+        }
+    }
+
+    private fun cornerParams() = FrameLayout.LayoutParams(dp(110), dp(150), Gravity.TOP or Gravity.END).apply {
+        setMargins(dp(12), dp(44), dp(12), dp(12))
     }
 
     override fun onCall(state: CallState) {
         if (session == null) return
         callState = state
         incomingPanel.visibility = if (state == CallState.INCOMING) View.VISIBLE else View.GONE
-        callPanel.visibility = if (state == CallState.OUTGOING || state == CallState.ACTIVE) View.VISIBLE else View.GONE
         renderVideo()
         voiceBtn.isEnabled = ready && state == CallState.IDLE
+        videoBtn.isEnabled = voiceBtn.isEnabled
         if (state == CallState.IDLE) {
             muted = false
             muteBtn.text = "Mute"
