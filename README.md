@@ -57,6 +57,22 @@ Whoever taps **New room** is the room's **owner**; whoever joins with the code i
   who), so they're a usability feature, not a hard security boundary. "End" and "remove" reach the
   other side while they're online, or the next time they connect.
 
+## Notes disguise (Android)
+
+The Android app installs as **Notes**, with a notepad icon. On the home screen, tap
+**Disguise as Notes** to choose a secret phrase and a PIN. From then on the app opens as a working
+notes list. To get in, add a note whose text is the secret phrase (capitals and extra spaces don't
+matter), then enter the PIN. A wrong PIN goes back to the notes without saying anything.
+
+- It locks again whenever you leave the app, except during a call. While it's locked you're offline,
+  so the other person sees you as offline and messages arrive the next time you open it.
+- The phrase and PIN are stored only as salted PBKDF2 hashes in the Keystore-encrypted store. The
+  note box turns off keyboard learning, so the phrase isn't saved as a suggestion.
+- It only hides the app from a casual look at the phone. Android's app settings still show the
+  package name `app.ghostline`, and anyone who can inspect the phone with developer tools can find
+  it. If you forget the phrase or PIN, the only way back in is to clear the app's data, which
+  deletes your rooms.
+
 ## Hiding IP addresses (TURN relay)
 
 By default the browsers connect directly, so each side can see the other's IP address, and

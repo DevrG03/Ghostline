@@ -6,6 +6,7 @@ import android.app.AlertDialog
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -26,6 +27,7 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.util.TypedValue
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -38,6 +40,8 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -45,8 +49,12 @@ import java.text.DateFormat
 import java.util.Date
 
 class MainActivity : Activity(), HubUi {
-    private enum class Screen { HOME, PAIR, ROOM }
+    private enum class Screen { NOTES, PIN, HOME, PAIR, ROOM, DISGUISE }
 
+    private lateinit var lock: Lock
+    private var locked = false // showing the Notes disguise; Ghostline isn't connected
+    private var disguiseEditing = false
+    private var focusNotes = false
     private var hub: Hub? = null
     private lateinit var audio: CallAudio
     private lateinit var egl: EglBase
@@ -93,14 +101,18 @@ class MainActivity : Activity(), HubUi {
         super.onCreate(savedInstanceState)
         // Block screenshots, screen recording and the app-switcher thumbnail.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        window.statusBarColor = BG
-        window.navigationBarColor = SURFACE
         Hub.init(this)
         audio = CallAudio(this)
         egl = EglBase.create()
+        lock = Lock(this)
         buildLayers()
-        startHub()
-        show(Screen.HOME)
+        if (lock.enabled) {
+            locked = true
+            show(Screen.NOTES)
+        } else {
+            startHub()
+            show(Screen.HOME)
+        }
     }
 
     override fun onStart() {
@@ -110,7 +122,33 @@ class MainActivity : Activity(), HubUi {
 
     override fun onStop() {
         hub?.setForeground(false)
+        // With the disguise on, leaving the app locks it again, unless a call is going on.
+        val call = view?.call
+        if (lock.enabled && !locked && (call == null || !inCall(call))) relock()
+        else if (screen == Screen.PIN) show(Screen.NOTES)
         super.onStop()
+    }
+
+    private fun unlock() {
+        hideKeyboard()
+        locked = false
+        startHub()
+        show(Screen.HOME)
+    }
+
+    private fun relock() {
+        locked = true
+        hub?.close()
+        hub = null
+        view = null
+        lastCallState = CallState.IDLE
+        callMinimized = false
+        incoming.visibility = View.GONE
+        callBar.visibility = View.GONE
+        callScreen.visibility = View.GONE
+        setCallFullScreen(false)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        show(Screen.NOTES)
     }
 
     override fun onDestroy() {
@@ -130,7 +168,8 @@ class MainActivity : Activity(), HubUi {
                 callMinimized = true
                 render()
             }
-            screen == Screen.ROOM -> show(Screen.HOME)
+            screen == Screen.ROOM || screen == Screen.DISGUISE -> show(Screen.HOME)
+            screen == Screen.PIN -> show(Screen.NOTES)
             screen == Screen.PAIR -> {
                 hub?.pairCancel()
                 show(Screen.HOME)
@@ -150,6 +189,7 @@ class MainActivity : Activity(), HubUi {
     }
 
     override fun onView(view: HubView) {
+        if (locked) return // a late update from the hub that relock() just closed
         this.view = view
         val call = view.call
         if (call.state == CallState.INCOMING && lastCallState != CallState.INCOMING) vibrate()
@@ -162,6 +202,7 @@ class MainActivity : Activity(), HubUi {
     }
 
     override fun onNotice(text: String) {
+        if (locked) return
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle("Room closed").setMessage(text).setPositiveButton("OK", null).show()
     }
@@ -179,12 +220,16 @@ class MainActivity : Activity(), HubUi {
         roomRefs = null
         messages = null
         content.removeAllViews()
+        setBars(light = s == Screen.NOTES || s == Screen.PIN)
         if (s == Screen.ROOM) content.addView(buildRoom())
         render()
     }
 
     private fun render() {
         when (screen) {
+            Screen.NOTES -> rebuildIfChanged("notes|" + notes()) { buildNotes() }
+            Screen.PIN -> rebuildIfChanged("pin") { buildPin() }
+            Screen.DISGUISE -> rebuildIfChanged("disguise|${lock.enabled}|$disguiseEditing") { buildDisguise() }
             Screen.HOME -> rebuildIfChanged(homeKey()) { buildHome() }
             Screen.PAIR -> rebuildIfChanged(pairKey()) { buildPair() }
             Screen.ROOM -> renderRoom()
@@ -202,7 +247,7 @@ class MainActivity : Activity(), HubUi {
 
     private fun homeKey(): String {
         val v = view
-        return "${server()}|${hub != null}|${v?.connected}|" + v?.rooms?.joinToString(";") {
+        return "${server()}|${hub != null}|${lock.enabled}|${v?.connected}|" + v?.rooms?.joinToString(";") {
             "${it.id},${it.name},${it.preview},${it.unread},${it.ready},${it.ended}"
         }
     }
@@ -267,12 +312,237 @@ class MainActivity : Activity(), HubUi {
                 setLineSpacing(0f, 1.15f)
             }.spaced(24, 0, 20),
         )
+        root.addView(text("Disguise as Notes · ${if (lock.enabled) "On" else "Off"}", 12f, MUTED).apply {
+            setPadding(dp(20), dp(14), dp(20), 0)
+            background = ripple()
+            setOnClickListener {
+                disguiseEditing = false
+                show(Screen.DISGUISE)
+            }
+        })
         root.addView(text("Server · ${server().removePrefix("https://")}", 12f, MUTED).apply {
             setPadding(dp(20), dp(14), dp(20), dp(24))
             background = ripple()
             setOnClickListener { askServer() }
         })
         return scroll(root)
+    }
+
+    // ---------- notes (the disguise) ----------
+
+    private fun notes(): JSONArray = try {
+        JSONArray(getSharedPreferences("notes", MODE_PRIVATE).getString("items", "[]"))
+    } catch (e: Exception) {
+        JSONArray()
+    }
+
+    private fun saveNotes(a: JSONArray) {
+        getSharedPreferences("notes", MODE_PRIVATE).edit().putString("items", a.toString()).apply()
+        render()
+    }
+
+    private fun buildNotes(): View {
+        val items = notes()
+        val root = column(pad = 0)
+        val top = column(pad = 0).apply { setPadding(dp(20), dp(24), dp(20), dp(12)) }
+        top.addView(text("Notes", 30f, N_TEXT, bold = true))
+        top.addView(text(DateFormat.getDateInstance(DateFormat.FULL).format(Date()), 13f, N_MUTED).apply { setPadding(0, dp(2), 0, 0) })
+        root.addView(top)
+
+        val composer = row().apply { setPadding(dp(16), dp(4), dp(16), dp(12)) }
+        val input = edit("Add a note", "").apply {
+            setTextColor(N_TEXT)
+            background = rounded(Color.WHITE, 12, N_LINE)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            // the secret phrase is typed here, so the keyboard mustn't learn it or suggest it later
+            imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            filters = arrayOf(InputFilter.LengthFilter(200))
+        }
+        input.setOnEditorActionListener { _, _, _ -> addNote(input); true }
+        composer.addView(input, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { rightMargin = dp(8) })
+        composer.addView(iconButton(R.drawable.ic_add, "Add note", tint = Color.WHITE, bg = N_ACCENT, size = 46) { addNote(input) })
+        root.addView(composer)
+
+        if (items.length() == 0) {
+            root.addView(text("No notes yet.", 15f, N_MUTED).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(32), dp(48), dp(32), dp(48))
+            })
+        }
+        for (i in 0 until items.length()) root.addView(noteRow(items, i))
+
+        if (focusNotes) {
+            focusNotes = false
+            input.requestFocus()
+        }
+        return ScrollView(this).apply {
+            setBackgroundColor(N_BG)
+            isFillViewport = true
+            addView(root)
+        }
+    }
+
+    private fun noteRow(items: JSONArray, i: Int): View {
+        val note = items.getJSONObject(i)
+        val done = note.optBoolean("done")
+        val item = row().apply {
+            setPadding(dp(20), dp(14), dp(20), dp(14))
+            background = ripple(bounded = true)
+            setOnClickListener {
+                note.put("done", !done)
+                saveNotes(items)
+            }
+            setOnLongClickListener {
+                AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert)
+                    .setMessage("Delete this note?")
+                    .setPositiveButton("Delete") { _, _ -> items.remove(i); saveNotes(items) }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+                true
+            }
+        }
+        item.addView(View(this).apply {
+            background = if (done) circle(N_ACCENT) else circle(Color.TRANSPARENT).apply { setStroke(dp(2), N_MUTED) }
+        }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(14) })
+        item.addView(text(note.optString("t"), 16f, if (done) N_MUTED else N_TEXT).apply {
+            if (done) paintFlags = paintFlags or Paint.STRIKE_THRU_TEXT_FLAG
+        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        return item
+    }
+
+    private fun addNote(input: EditText) {
+        val t = input.text.toString().trim()
+        if (t.isEmpty()) return
+        input.setText("")
+        if (lock.isPhrase(t)) {
+            show(Screen.PIN)
+            return
+        }
+        val items = notes()
+        items.put(JSONObject().put("t", t).put("done", false))
+        focusNotes = true
+        saveNotes(items)
+    }
+
+    // Looks like a notes app's locked note. A wrong PIN just goes back to the notes.
+    private fun buildPin(): View {
+        val root = column(pad = 24).apply {
+            setBackgroundColor(N_BG)
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(32), dp(96), dp(32), dp(32))
+        }
+        root.addView(text("Locked note", 22f, N_TEXT, bold = true).apply { gravity = Gravity.CENTER })
+        root.addView(text("Enter the PIN to view this note.", 14f, N_MUTED).apply { gravity = Gravity.CENTER }.spaced(6, 0))
+        val field = edit("PIN", "").apply {
+            setTextColor(N_TEXT)
+            textSize = 26f
+            gravity = Gravity.CENTER
+            letterSpacing = 0.3f
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            filters = arrayOf(InputFilter.LengthFilter(12))
+            background = rounded(Color.WHITE, 12, N_LINE)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+        }
+        val open = {
+            if (lock.checkPin(field.text.toString())) unlock() else { hideKeyboard(); show(Screen.NOTES) }
+        }
+        field.setOnEditorActionListener { _, _, _ -> open(); true }
+        root.addView(field, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(28) })
+        root.addView(button("Open", primary = true) { open() }.apply { background = rounded(N_ACCENT, 14) }.spaced(14, 0))
+        root.addView(text("Cancel", 15f, N_MUTED).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(14), 0, dp(14))
+            setOnClickListener { hideKeyboard(); show(Screen.NOTES) }
+        }.spaced(4, 0))
+        field.requestFocus()
+        field.post { getSystemService(InputMethodManager::class.java)?.showSoftInput(field, 0) }
+        return root
+    }
+
+    private fun hideKeyboard() {
+        getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(window.decorView.windowToken, 0)
+    }
+
+    // ---------- disguise settings ----------
+
+    private fun buildDisguise(): View {
+        val root = column(pad = 0)
+        val top = row().apply { setPadding(dp(4), dp(8), dp(16), dp(8)) }
+        top.addView(iconButton(R.drawable.ic_back, "Back") { show(Screen.HOME) })
+        top.addView(text("Disguise as Notes", 20f, TEXT, bold = true))
+        root.addView(top)
+        val body = column(pad = 20)
+        root.addView(body)
+
+        if (lock.enabled && !disguiseEditing) {
+            body.addView(text(
+                "On. Ghostline opens as a Notes app. To get in, add a note that is your secret phrase, then enter your PIN.\n\n" +
+                    "It locks again whenever you leave the app, except during a call. While locked you are offline, " +
+                    "so messages arrive when you next open it.",
+                15f, MUTED,
+            ).apply { setLineSpacing(0f, 1.15f) })
+            body.addView(button("Change phrase and PIN") { disguiseEditing = true; render() }.spaced(20, 0))
+            body.addView(button("Turn off", danger = true) {
+                confirm("Turn off the disguise?", "Ghostline will open normally again.", "Turn off") {
+                    lock.disable()
+                    render()
+                }
+            }.spaced(10, 0))
+            return scroll(root)
+        }
+
+        body.addView(text(
+            "Ghostline will open as a Notes app. Typing your secret phrase as a new note asks for your PIN, and the right PIN opens Ghostline.\n\n" +
+                "Pick a phrase you would never write as a real note. If you forget it, the only way back in is to clear the app's data, which deletes your rooms.",
+            15f, MUTED,
+        ).apply { setLineSpacing(0f, 1.15f) })
+        val phrase = field("Secret phrase", "").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            filters = arrayOf(InputFilter.LengthFilter(200))
+        }
+        body.addView(phrase, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(20) })
+        val pin = field("PIN (4–12 digits)", "").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            filters = arrayOf(InputFilter.LengthFilter(12))
+        }
+        body.addView(pin, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(12) })
+        val again = field("PIN again", "").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            filters = arrayOf(InputFilter.LengthFilter(12))
+        }
+        body.addView(again, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(12) })
+        body.addView(button(if (lock.enabled) "Save" else "Turn on", primary = true) {
+            val p = pin.text.toString()
+            when {
+                Lock.normalize(phrase.text.toString()).length < 4 -> toast("The phrase needs at least 4 characters.")
+                !Regex("^\\d{4,12}$").matches(p) -> toast("The PIN needs 4 to 12 digits.")
+                p != again.text.toString() -> toast("The PINs don't match.")
+                else -> {
+                    lock.set(phrase.text.toString(), p)
+                    hideKeyboard()
+                    toast("Disguise on. It takes effect when you leave the app.")
+                    show(Screen.HOME)
+                }
+            }
+        }.spaced(16, 0))
+        return scroll(root)
+    }
+
+    // Light bars for the Notes disguise, dark ones for Ghostline.
+    @Suppress("DEPRECATION")
+    private fun setBars(light: Boolean) {
+        window.statusBarColor = if (light) N_BG else BG
+        window.navigationBarColor = if (light) N_BG else SURFACE
+        if (Build.VERSION.SDK_INT >= 30) {
+            val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (light) mask else 0, mask)
+        } else {
+            window.decorView.systemUiVisibility =
+                if (light) View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR else 0
+        }
     }
 
     private fun roomRow(r: RoomView): View {
@@ -1053,6 +1323,12 @@ class MainActivity : Activity(), HubUi {
         private val ME = Color.parseColor("#2f5bb7")
         private val THEM = Color.parseColor("#232a33")
         private val BORDER = Color.parseColor("#2a313b")
+        // the Notes disguise is light, so it doesn't look like Ghostline
+        private val N_BG = Color.parseColor("#faf8f3")
+        private val N_TEXT = Color.parseColor("#22252a")
+        private val N_MUTED = Color.parseColor("#8d9096")
+        private val N_ACCENT = Color.parseColor("#e3a21a")
+        private val N_LINE = Color.parseColor("#e7e3d9")
         private val AVATAR_COLORS = listOf("#5b7cfa", "#22a39f", "#d9822b", "#c2508f", "#7e57c2", "#3f9e4d", "#c9534f").map { Color.parseColor(it) }
         private val TTL_LABELS = listOf("Keep", "30s", "5m", "1h")
         private val TTL_SECONDS = listOf(0, 30, 300, 3600)
