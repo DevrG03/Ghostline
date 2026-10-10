@@ -9,85 +9,56 @@
   <title>Ghostline</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/style.css">
-  <script src="/spake2.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <!-- chat list -->
-  <main id="home" class="page" hidden>
-    <header class="top">
-      <h1>Ghostline</h1>
-      <span id="netStatus" class="net"></span>
-    </header>
-    <div class="row pad">
-      <button id="newRoomBtn" class="primary grow">New room</button>
-      <button id="joinRoomBtn" class="grow">Join with code</button>
-    </div>
-    <ul id="roomList" class="rooms"></ul>
-    <p id="emptyRooms" class="empty pad" hidden>No rooms yet. Tap <strong>New room</strong> to get a code,
-      or <strong>Join with code</strong> if someone gave you one.</p>
-    <p id="memoryOnly" class="warn pad" hidden>This browser isn't saving data (private mode?), so rooms
-      will be forgotten when you close this tab.</p>
-    <p class="warn pad">No website can protect you from spyware already on your device that records
-      the screen, keyboard or microphone. Use a device you trust.</p>
+  <main id="landing" class="landing" hidden>
+    <h1>Ghostline</h1>
+    <p class="lead">Private chat, voice and video between two people. No accounts, no history, nothing stored.</p>
+    <button id="createBtn" class="primary big">Create private room</button>
+    <ul class="facts">
+      <li>Messages and calls go directly between the two devices, end-to-end encrypted.</li>
+      <li>The room key exists only inside the invite link. The server never sees it.</li>
+      <li>Close or refresh the tab and the conversation is gone for good.</li>
+    </ul>
+    <p class="warn">Important: no website can protect you from spyware that is already installed on your phone and can
+      record the screen, keyboard or microphone. For best results, use a private/incognito tab on a device you trust.</p>
   </main>
 
-  <!-- pairing: show a code, or type one -->
-  <section id="pair" class="page" hidden>
-    <header class="top">
-      <button id="pairBack" class="icon" aria-label="Back">←</button>
-      <h2 id="pairTitle">New room</h2>
-    </header>
-    <div class="pad">
-      <div id="pairShow" hidden>
-        <p class="muted">Give this code to <strong>one</strong> person, in person or over a channel you trust.
-          It works once and expires in 10 minutes.</p>
-        <div id="pairCode" class="code">— — —</div>
-        <p id="pairExpiry" class="muted center"></p>
-      </div>
-      <form id="pairEnter" hidden>
-        <p class="muted">Enter the code the other person sees on their screen.</p>
-        <input id="codeInput" class="code-input" inputmode="numeric" autocomplete="off" autocorrect="off"
-               autocapitalize="off" spellcheck="false" placeholder="17-482-913" maxlength="13">
-        <button id="codeJoinBtn" class="primary big full">Join</button>
-      </form>
-      <form id="pairName" hidden>
-        <p class="ok-text">✓ Paired securely.</p>
-        <label class="muted" for="roomNameInput">Name this room (only you see this name)</label>
-        <input id="roomNameInput" maxlength="40" autocomplete="off" spellcheck="false">
-        <button class="primary big full">Save</button>
-      </form>
-      <p id="pairStatus" class="status-line"></p>
-    </div>
-  </section>
-
-  <!-- one room -->
-  <section id="room" class="room page" hidden>
+  <section id="room" class="room" hidden>
     <header class="bar">
-      <button id="roomBack" class="icon" aria-label="Back to rooms">←</button>
-      <div class="title">
-        <strong id="roomTitle"></strong>
-        <div class="status"><span id="dot" class="dot"></span><span id="statusText"></span></div>
-      </div>
+      <div class="status"><span id="dot" class="dot"></span><span id="statusText">Connecting…</span></div>
       <div class="actions">
         <button id="voiceBtn" disabled>Voice</button>
         <button id="videoBtn" disabled>Video</button>
-        <button id="menuBtn" class="icon" aria-label="Room options">⋯</button>
+        <button id="inviteBtn">Invite</button>
+        <button id="leaveBtn" class="danger">Leave</button>
       </div>
     </header>
 
-    <div id="menu" class="panel menu" hidden>
-      <button id="renameBtn">Rename</button>
-      <button id="clearBtn">Clear chat</button>
-      <button id="leaveBtn" class="danger">Leave room</button>
+    <div id="invite" class="panel" hidden>
+      <p>Send this link to <strong>one</strong> person over a channel you trust. Anyone with the link can join (max 2 people).</p>
+      <div class="row">
+        <input id="inviteLink" readonly autocomplete="off" spellcheck="false">
+        <button id="copyBtn">Copy</button>
+      </div>
     </div>
 
     <div id="safetyBox" class="safety">
       Safety code: <strong id="safety">—</strong>
       <button id="verifyBtn" class="verify" type="button" hidden>Mark verified</button>
       <span class="verified-tag">✓ verified</span>
-      <span class="hint">Compare it out loud on a call. If both screens match, nobody is in the middle.
+      <span class="hint">Read it out loud on a call. If both screens match, nobody is listening in the middle.
         Once verified, you'll be warned if it ever changes.</span>
+    </div>
+
+    <div id="incoming" class="panel incoming" hidden>
+      <span id="incomingText">Incoming call</span>
+      <div class="row">
+        <button id="acceptVoiceBtn" class="primary">Answer voice</button>
+        <button id="acceptVideoBtn" class="primary">Answer video</button>
+        <button id="declineBtn" class="danger">Decline</button>
+      </div>
     </div>
 
     <div id="call" class="call" hidden>
@@ -111,33 +82,11 @@
         <option value="300">5m</option>
         <option value="3600">1h</option>
       </select>
-      <input id="msgInput" placeholder="Message" maxlength="4000"
+      <input id="msgInput" placeholder="Message" maxlength="4000" disabled
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-      <button id="sendBtn" class="primary">Send</button>
+      <button id="sendBtn" class="primary" disabled>Send</button>
+      <button id="clearBtn" type="button" title="Clear chat on both sides">Clear</button>
     </form>
   </section>
-
-  <!-- shown over any page -->
-  <div id="incoming" class="incoming" hidden>
-    <span id="incomingText">Incoming call</span>
-    <div class="row">
-      <button id="acceptVoiceBtn" class="primary">Answer voice</button>
-      <button id="acceptVideoBtn" class="primary">Answer video</button>
-      <button id="declineBtn" class="danger">Decline</button>
-    </div>
-  </div>
-  <button id="callBar" class="callbar" hidden>Call in progress · tap to return</button>
-
-  <dialog id="dialog">
-    <div class="dialog-body">
-      <h3 id="dialogTitle"></h3>
-      <p id="dialogText"></p>
-      <input id="dialogInput" maxlength="40" autocomplete="off" spellcheck="false" hidden>
-      <div class="row end">
-        <button id="dialogCancel" type="button">Cancel</button>
-        <button id="dialogOk" type="button" class="primary">OK</button>
-      </div>
-    </div>
-  </dialog>
 </body>
 </html>
