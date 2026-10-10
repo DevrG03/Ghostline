@@ -19,7 +19,7 @@ Not listed (generated, binary, or a lockfile, so not hand-written source): `andr
 - [`android/app/src/main/AndroidManifest.xml`](#androidappsrcmainandroidmanifestxml) — 39 lines
 - [`android/app/src/main/java/app/plainnotes/CallAudio.kt`](#androidappsrcmainjavaappplainnotescallaudiokt) — 40 lines
 - [`android/app/src/main/java/app/plainnotes/Crypto.kt`](#androidappsrcmainjavaappplainnotescryptokt) — 146 lines
-- [`android/app/src/main/java/app/plainnotes/Hub.kt`](#androidappsrcmainjavaappplainnoteshubkt) — 1104 lines
+- [`android/app/src/main/java/app/plainnotes/Hub.kt`](#androidappsrcmainjavaappplainnoteshubkt) — 1111 lines
 - [`android/app/src/main/java/app/plainnotes/Lock.kt`](#androidappsrcmainjavaappplainnoteslockkt) — 121 lines
 - [`android/app/src/main/java/app/plainnotes/MainActivity.kt`](#androidappsrcmainjavaappplainnotesmainactivitykt) — 1439 lines
 - [`android/app/src/main/java/app/plainnotes/Store.kt`](#androidappsrcmainjavaappplainnotesstorekt) — 85 lines
@@ -47,7 +47,7 @@ Not listed (generated, binary, or a lockfile, so not hand-written source): `andr
 - [`android/gradle.properties`](#androidgradleproperties) — 4 lines
 - [`android/settings.gradle.kts`](#androidsettingsgradlekts) — 16 lines
 
-**40 files, 5340 lines.**
+**40 files, 5347 lines.**
 
 
 ## `server.js`
@@ -2921,7 +2921,13 @@ class Hub(
         var serverPeer = false
         var full = false
         var code: String? = null
-        var remoteVideo: VideoTrack? = null
+
+        // Every video track the other side could be sending on. Repeated calls reuse transceivers,
+        // and which one carries their camera can change, so the screen is fed from all of them
+        // (like the web app's remote stream); only the one in use has frames.
+        fun remoteVideos(): List<VideoTrack> = pc?.transceivers.orEmpty()
+            .filter { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO && !it.isStopped }
+            .mapNotNull { it.receiver.track() as? VideoTrack }
         private val expiry = HashMap<String, ScheduledFuture<*>?>()
         // replay protection for signaling: fresh id per peer session + increasing counter
         var me = Crypto.newId()
@@ -3034,15 +3040,17 @@ class Hub(
 
             override fun onTrack(transceiver: RtpTransceiver) = mine {
                 val track = transceiver.receiver.track()
-                if (track is VideoTrack && track !== remoteVideo) {
-                    if (call.room === this@Room) remoteVideo?.removeSink(remoteSink)
-                    remoteVideo = track
-                    if (call.room === this@Room) track.addSink(remoteSink)
-                }
+                if (track is VideoTrack && call.room === this@Room) track.addSink(remoteSink)
             }
 
             override fun onSignalingChange(s: PeerConnection.SignalingState) {
-                if (s == PeerConnection.SignalingState.STABLE) mine { updateSafetyCode(it) }
+                if (s == PeerConnection.SignalingState.STABLE) mine {
+                    updateSafetyCode(it)
+                    // Their camera can arrive on a transceiver added after the call was accepted,
+                    // and onTrack doesn't reliably report it, so connect the screen again once each
+                    // negotiation settles. Adding a sink twice is a no-op.
+                    if (call.room === this@Room && call.state != CallState.IDLE) remoteVideos().forEach { v -> v.addSink(remoteSink) }
+                }
             }
 
             override fun onConnectionChange(s: PeerConnection.PeerConnectionState) = mine { p ->
@@ -3093,7 +3101,6 @@ class Hub(
             ch?.unregisterObserver()
             ch?.close()
             ch?.dispose()
-            remoteVideo = null
             val p = pc
             pc = null
             p?.dispose()
@@ -3472,7 +3479,7 @@ class Hub(
                 if (call.room !== room || call.state != CallState.OUTGOING) return
                 call.peerVideo = m.optBoolean("video")
                 call.state = CallState.ACTIVE
-                room.remoteVideo?.addSink(remoteSink)
+                room.remoteVideos().forEach { it.addSink(remoteSink) }
                 attachTracks(room)
             }
             "decline", "busy" -> {
@@ -3585,7 +3592,7 @@ class Hub(
         if (wantVideo && !video) room.addSys("Could not start the camera, answering with voice only.")
         main.post { audio.start() }
         call.state = CallState.ACTIVE
-        room.remoteVideo?.addSink(remoteSink)
+        room.remoteVideos().forEach { it.addSink(remoteSink) }
         attachTracks(room)
         room.sendPeer(JSONObject().put("t", "accept").put("video", video))
         publish()
@@ -3611,7 +3618,7 @@ class Hub(
         }
         stopCamera()
         room?.pc?.senders?.forEach { if (it.track() != null) it.setTrack(null, false) }
-        room?.remoteVideo?.removeSink(remoteSink)
+        room?.remoteVideos()?.forEach { it.removeSink(remoteSink) }
         audioTrack?.dispose()
         audioSource?.dispose()
         audioTrack = null
