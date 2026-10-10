@@ -43,6 +43,17 @@ Camera, microphone and the encryption APIs only work over **HTTPS**. Pick one:
   (best effort: some phones take the snapshot before the page can blank itself).
 - The server survives malformed input and enforces connection, rate and pairing-attempt limits.
 
+## Roles
+
+Whoever taps **New room** is the room's **owner**; whoever joins with the code is a **participant**.
+
+- **Owner** can **end the room for both** (history wiped on both devices) and **remove the participant**
+  (they're kicked and their copy is deleted; the owner keeps the history as a read-only archive).
+- **Participant** can **leave** (deletes their own copy). Both can chat, call and verify the safety code.
+- Roles are enforced by each app, not by the server (the server has no trusted identity of who is
+  who), so they're a usability feature, not a hard security boundary. "End" and "remove" reach the
+  other side while they're online, or the next time they connect.
+
 ## Hiding IP addresses (TURN relay)
 
 By default the browsers connect directly, so each side can see the other's IP address, and

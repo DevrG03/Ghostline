@@ -137,6 +137,7 @@ const store = {
 
 const rooms = new Map(); // room id -> Room
 let current = null; // Room on screen
+let pendingNotice = null; // a one-off message to show when we next land on the home screen
 let saveRoomsTimer = null;
 
 function saveRooms() {
@@ -453,12 +454,25 @@ class Room {
         this.msgs = [];
         this.addSys('The other person cleared the chat.');
         break;
-      case 'bye':
+      case 'bye': {
+        const who = this.rec.role === 'owner' ? 'The participant' : 'The other person';
         this.rec.ended = true;
         saveRooms();
         net.send({ type: 'leave', room: this.id });
-        this.addSys('The other person left this room. You can delete it from the ⋯ menu.');
+        this.addSys(who + ' left this room. You can delete it from the ⋯ menu.');
         this.teardown();
+        break;
+      }
+      case 'end-room':
+        // Only the owner may end for both; a participant honours it.
+        if (this.rec.role === 'owner') break;
+        pendingNotice = 'The owner ended this room, so it was deleted here too.';
+        wipeRoom(this);
+        break;
+      case 'removed':
+        if (this.rec.role === 'owner') break;
+        pendingNotice = 'The owner removed you from this room.';
+        wipeRoom(this);
         break;
       default:
         onCallMessage(this, m);
@@ -645,7 +659,8 @@ const pairing = {
   },
 };
 
-async function addRoom(secret, name) {
+// role: 'owner' (created the room) or 'participant' (joined with the code).
+async function addRoom(secret, name, role) {
   const keys = await roomKeys(secret);
   if (rooms.has(keys.id)) return rooms.get(keys.id);
   let cert = null;
@@ -655,7 +670,10 @@ async function addRoom(secret, name) {
   } catch {
     // can't store certificates in this browser: the safety code will change on each reconnect
   }
-  const rec = { id: keys.id, secret, name: name || 'Room', created: Date.now(), verifiedCode: null, unread: 0, ended: false };
+  const rec = {
+    id: keys.id, secret, name: name || 'Room', created: Date.now(),
+    verifiedCode: null, unread: 0, ended: false, role: role || 'owner',
+  };
   const room = new Room(rec, keys, [], cert);
   room.addSys('Paired. Compare the safety code with the other person once (read it out loud) and tap Mark verified.');
   rooms.set(room.id, room);
@@ -664,18 +682,49 @@ async function addRoom(secret, name) {
   return room;
 }
 
-async function deleteRoom(room) {
+// Remove the room and everything it stores from this device.
+function wipeRoom(room) {
   if (call.room === room) endCall(true);
-  room.sendPeer({ t: 'bye' });
-  await sleep(150); // let the goodbye go out before the channel closes
-  net.send({ type: 'leave', room: room.id });
   room.teardown();
   for (const t of room.expiryTimers.values()) clearTimeout(t);
+  net.send({ type: 'leave', room: room.id });
   rooms.delete(room.id);
   saveRooms();
   store.del('msgs:' + room.id);
   store.del('cert:' + room.id);
   if (current === room) showHome();
+}
+
+// Keep the room as a read-only archive (history stays, no more chatting).
+function archiveRoom(room, sysText) {
+  if (call.room === room) endCall(true);
+  room.rec.ended = true;
+  room.addSys(sysText);
+  saveRooms();
+  net.send({ type: 'leave', room: room.id });
+  room.teardown();
+  renderAll();
+}
+
+// Participant leaves (or deletes a finished room): gone here, the other side keeps an archive.
+async function leaveRoom(room) {
+  room.sendPeer({ t: 'bye' });
+  await sleep(150); // let the goodbye go out before the channel closes
+  wipeRoom(room);
+}
+
+// Owner: end the room for both people, history wiped on both sides.
+async function endRoomForBoth(room) {
+  room.sendPeer({ t: 'end-room' });
+  await sleep(150);
+  wipeRoom(room);
+}
+
+// Owner: remove the participant. They're kicked; the owner keeps the history as an archive.
+async function removeParticipant(room) {
+  room.sendPeer({ t: 'removed' });
+  await sleep(150);
+  archiveRoom(room, 'You removed the participant. To talk again, start a new room.');
 }
 
 // ---------- calls (one at a time, in any room) ----------
@@ -874,6 +923,11 @@ function showHome() {
   $('menu').hidden = true;
   showPage('home');
   renderAll();
+  if (pendingNotice) {
+    const text = pendingNotice;
+    pendingNotice = null;
+    ask({ title: 'Room closed', text, ok: 'OK' });
+  }
 }
 
 function showPairPage(step) {
@@ -1010,7 +1064,10 @@ function renderRoom() {
   $('safetyBox').classList.toggle('verified', verified);
   $('safetyBox').classList.toggle('changed', !!room.rec.verifiedCode && !!room.code && !verified);
   $('verifyBtn').hidden = !room.code || verified;
-  $('leaveBtn').textContent = room.rec.ended ? 'Delete room' : 'Leave room';
+  const owner = room.rec.role === 'owner';
+  $('roleTag').textContent = owner ? 'You own this room' : 'You joined this room';
+  $('removeBtn').hidden = !owner || room.rec.ended;
+  $('leaveBtn').textContent = room.rec.ended ? 'Delete room' : owner ? 'End room for both' : 'Leave room';
   renderMessages(room);
 }
 
@@ -1089,7 +1146,8 @@ $('pairEnter').onsubmit = (e) => {
 $('pairName').onsubmit = async (e) => {
   e.preventDefault();
   if (!pairing.secret) return;
-  const room = await addRoom(pairing.secret, $('roomNameInput').value.trim() || 'Room');
+  const role = pairing.mode === 'create' ? 'owner' : 'participant';
+  const room = await addRoom(pairing.secret, $('roomNameInput').value.trim() || 'Room', role);
   pairing.reset();
   openRoom(room);
 };
@@ -1123,22 +1181,50 @@ $('clearBtn').onclick = async () => {
   room.sendPeer({ t: 'clear' });
   renderAll();
 };
+$('removeBtn').onclick = async () => {
+  $('menu').hidden = true;
+  const room = current;
+  if (room.rec.role !== 'owner' || room.rec.ended) return;
+  const sure = await ask({
+    title: 'Remove the participant?',
+    text: 'They are removed from this room and their copy is deleted. ' +
+      (room.dcOpen() ? '' : 'They are offline, so this takes effect when they next connect. ') +
+      'You keep the chat history here as a read-only archive.',
+    ok: 'Remove',
+    danger: true,
+  });
+  if (sure) removeParticipant(room);
+};
 $('leaveBtn').onclick = async () => {
   $('menu').hidden = true;
   const room = current;
-  const sure = await ask(room.rec.ended
-    ? { title: 'Delete this room?', text: 'Its chat history is deleted from this device.', ok: 'Delete', danger: true }
-    : {
+  const owner = room.rec.role === 'owner';
+  let opts;
+  if (room.rec.ended) {
+    opts = { title: 'Delete this room?', text: 'Its chat history is deleted from this device.', ok: 'Delete', danger: true };
+  } else if (owner) {
+    opts = {
+      title: 'End this room for both?',
+      text: 'The room and its chat history are deleted on both devices. ' +
+        (room.dcOpen() ? '' : 'The other person is offline, so this reaches them when they next connect. ') +
+        'This cannot be undone.',
+      ok: 'End for both',
+      danger: true,
+    };
+  } else {
+    opts = {
       title: 'Leave this room?',
       text: 'The room and its chat history are deleted from this device. ' +
-        (room.dcOpen()
-          ? 'The other person is told you left. '
-          : 'The other person is offline, so they won’t be told; they’ll just see you as offline. ') +
+        (room.dcOpen() ? 'The owner is told you left. ' : 'The owner is offline, so they’ll just see you as offline. ') +
         'To talk again you’ll need a new code.',
       ok: 'Leave',
       danger: true,
-    });
-  if (sure) deleteRoom(room);
+    };
+  }
+  const sure = await ask(opts);
+  if (!sure) return;
+  if (!room.rec.ended && owner) endRoomForBoth(room);
+  else leaveRoom(room);
 };
 $('verifyBtn').onclick = () => {
   current.rec.verifiedCode = current.code;

@@ -23,7 +23,9 @@ Needs JDK 17 and the Android SDK (`brew install --cask android-commandlinetools`
 - **First run:** enter your server address (e.g. `https://ghostline-xxxx.onrender.com`). Change it
   later by tapping the server line at the bottom of the room list.
 - **New room** shows a 6-letter code; the other person taps **Join with code** and types it.
-- Rooms stay in the list until you tap **⋯ → Leave room** (you're asked first). Back just returns
+- Whoever taps **New room** owns it; whoever joins is a participant. The owner's ⋯ menu adds
+  **Remove participant** and **End room for both**; a participant only has **Leave room**.
+- Rooms stay in the list until you leave or end them (you're asked first). Back just returns
   to the list. During a call, the chat button shrinks the call to a bar so you can keep chatting.
 
 ## Calls

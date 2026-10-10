@@ -52,7 +52,8 @@ data class MsgView(val id: String, val mine: Boolean, val sys: Boolean, val text
 data class RoomView(
     val id: String, val name: String, val status: String, val kind: String, val ready: Boolean,
     val ended: Boolean, val unread: Int, val preview: String, val lastTs: Long,
-    val code: String?, val verified: Boolean, val codeChanged: Boolean, val msgs: List<MsgView>, val msgsKey: String,
+    val code: String?, val verified: Boolean, val codeChanged: Boolean, val owner: Boolean,
+    val msgs: List<MsgView>, val msgsKey: String,
 )
 
 data class PairView(val step: String?, val code: String?, val expiresAt: Long, val status: String, val bad: Boolean)
@@ -61,6 +62,7 @@ data class HubView(val connected: Boolean, val rooms: List<RoomView>, val pair: 
 
 interface HubUi {
     fun onView(view: HubView) // main thread
+    fun onNotice(text: String) // a one-off message, e.g. "the owner removed you"
 }
 
 // All rooms, pairing and calls. Speaks the same protocol as public/app.js. All state lives on
@@ -137,6 +139,8 @@ class Hub(
         r.addSys("Safety code marked as verified. You will be warned if it changes.")
     }
     fun leave(roomId: String) = post { leaveNow(roomId) }
+    fun endRoom(roomId: String) = post { endRoomForBothNow(roomId) }
+    fun removeParticipant(roomId: String) = post { removeParticipantNow(roomId) }
 
     fun pairCreate() = post { pairing.create() }
     fun pairJoin(code: String) = post { pairing.join(code) }
@@ -313,14 +317,16 @@ class Hub(
     class RoomRec(
         val id: String, val secret: String, var name: String, val created: Long,
         var verifiedCode: String?, var unread: Int, var ended: Boolean,
+        val role: String, // "owner" (created it) or "participant" (joined with the code)
     ) {
         fun json(): JSONObject = JSONObject().put("id", id).put("secret", secret).put("name", name).put("created", created)
-            .put("verifiedCode", verifiedCode ?: JSONObject.NULL).put("unread", unread).put("ended", ended)
+            .put("verifiedCode", verifiedCode ?: JSONObject.NULL).put("unread", unread).put("ended", ended).put("role", role)
 
         companion object {
             fun from(j: JSONObject) = RoomRec(
                 j.getString("id"), j.getString("secret"), j.optString("name", "Room"), j.optLong("created"),
                 if (j.isNull("verifiedCode")) null else j.optString("verifiedCode"), j.optInt("unread"), j.optBoolean("ended"),
+                j.optString("role", "owner"),
             )
         }
     }
@@ -623,12 +629,16 @@ class Hub(
                     addSys("The other person cleared the chat.")
                 }
                 "bye" -> {
+                    val who = if (rec.role == "owner") "The participant" else "The other person"
                     rec.ended = true
                     saveRooms()
                     sendServer(JSONObject().put("type", "leave").put("room", id))
-                    addSys("The other person left this room. You can delete it from the ⋯ menu.")
+                    addSys("$who left this room. You can delete it from the ⋯ menu.")
                     teardown()
                 }
+                // Only the owner may end a room or remove the participant; a participant honours it.
+                "end-room" -> if (rec.role != "owner") wipeRoom(id, notice = "The owner ended this room, so it was deleted here too.")
+                "removed" -> if (rec.role != "owner") wipeRoom(id, notice = "The owner removed you from this room.")
                 else -> onCallMessage(this, m)
             }
         }
@@ -679,13 +689,13 @@ class Hub(
             return RoomView(
                 id, rec.name, text, kind, dcOpen(), rec.ended, rec.unread, preview,
                 msgs.lastOrNull()?.ts ?: rec.created, code, code != null && code == rec.verifiedCode,
-                rec.verifiedCode != null && code != null && code != rec.verifiedCode, views,
+                rec.verifiedCode != null && code != null && code != rec.verifiedCode, rec.role == "owner", views,
                 views.joinToString(",") { it.id + it.status },
             )
         }
     }
 
-    private fun addRoom(secret: String, name: String): Room {
+    private fun addRoom(secret: String, name: String, role: String): Room {
         val keys = RoomKeys(secret)
         rooms[keys.roomId]?.let { return it }
         val cert = try {
@@ -696,7 +706,7 @@ class Hub(
             Log.w(TAG, "no saved certificate", e)
             null
         }
-        val rec = RoomRec(keys.roomId, secret, name.ifBlank { "Room" }.take(40), System.currentTimeMillis(), null, 0, false)
+        val rec = RoomRec(keys.roomId, secret, name.ifBlank { "Room" }.take(40), System.currentTimeMillis(), null, 0, false, role)
         val room = Room(rec, cert)
         rooms[rec.id] = room
         room.addSys("Paired. Compare the safety code with the other person once: tap Check above.")
@@ -705,18 +715,45 @@ class Hub(
         return room
     }
 
-    private fun leaveNow(roomId: String) {
+    // Remove the room and everything it stores from this device.
+    private fun wipeRoom(roomId: String, notice: String? = null) {
         val room = rooms[roomId] ?: return
         if (call.room === room) endCall(true)
-        room.sendPeer(JSONObject().put("t", "bye"))
-        later(150) { // let the goodbye go out before the channel closes
+        room.teardown()
+        room.cancelTimers()
+        rooms.remove(roomId)
+        saveRooms()
+        sendServer(JSONObject().put("type", "leave").put("room", roomId))
+        store.delete("msgs-$roomId")
+        store.delete("cert-$roomId")
+        notice?.let { n -> main.post { if (!closed) ui.onNotice(n) } }
+        publish()
+    }
+
+    // Participant leaves, or anyone deletes a finished room: gone here, the other side keeps an archive.
+    private fun leaveNow(roomId: String) {
+        val room = rooms[roomId] ?: return
+        if (!room.rec.ended) room.sendPeer(JSONObject().put("t", "bye"))
+        later(150) { wipeRoom(roomId) } // let the goodbye go out before the channel closes
+    }
+
+    // Owner: end the room for both people, history wiped on both sides.
+    private fun endRoomForBothNow(roomId: String) {
+        rooms[roomId]?.sendPeer(JSONObject().put("t", "end-room"))
+        later(150) { wipeRoom(roomId) }
+    }
+
+    // Owner: remove the participant. They're kicked; the owner keeps the history as an archive.
+    private fun removeParticipantNow(roomId: String) {
+        val room = rooms[roomId] ?: return
+        room.sendPeer(JSONObject().put("t", "removed"))
+        later(150) {
+            if (call.room === room) endCall(true)
+            room.rec.ended = true
+            room.addSys("You removed the participant. To talk again, start a new room.")
+            saveRooms()
             sendServer(JSONObject().put("type", "leave").put("room", roomId))
             room.teardown()
-            room.cancelTimers()
-            rooms.remove(roomId)
-            saveRooms()
-            store.delete("msgs-$roomId")
-            store.delete("cert-$roomId")
             publish()
         }
     }
@@ -786,7 +823,7 @@ class Hub(
 
         fun save(name: String): String? {
             val s = secret ?: return null
-            val room = addRoom(s, name)
+            val room = addRoom(s, name, if (mode == "create") "owner" else "participant")
             reset()
             publish()
             return room.id

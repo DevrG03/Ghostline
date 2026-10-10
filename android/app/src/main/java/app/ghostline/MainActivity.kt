@@ -161,6 +161,11 @@ class MainActivity : Activity(), HubUi {
         if (screen == Screen.ROOM && view.rooms.none { it.id == roomId }) show(Screen.HOME) else render()
     }
 
+    override fun onNotice(text: String) {
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Room closed").setMessage(text).setPositiveButton("OK", null).show()
+    }
+
     private fun inCall(c: CallView) = c.state == CallState.OUTGOING || c.state == CallState.ACTIVE
 
     // ---------- navigation ----------
@@ -627,9 +632,11 @@ class MainActivity : Activity(), HubUi {
     private fun roomMenu(anchor: View) {
         val r = currentRoom() ?: return
         PopupMenu(this, anchor).apply {
-            menu.add(0, 1, 0, "Rename")
-            menu.add(0, 2, 1, "Clear chat")
-            menu.add(0, 3, 2, if (r.ended) "Delete room" else "Leave room")
+            menu.add(0, 0, 0, if (r.owner) "You own this room" else "You joined this room").isEnabled = false
+            menu.add(0, 1, 1, "Rename")
+            menu.add(0, 2, 2, "Clear chat")
+            if (r.owner && !r.ended) menu.add(0, 4, 3, "Remove participant")
+            menu.add(0, 3, 4, if (r.ended) "Delete room" else if (r.owner) "End room for both" else "Leave room")
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     1 -> rename(r)
@@ -638,17 +645,30 @@ class MainActivity : Activity(), HubUi {
                         if (r.ready) "Messages are deleted on both devices." else "The other person is offline, so only your copy is deleted.",
                         "Clear",
                     ) { hub?.clearChat(r.id) }
-                    3 -> if (r.ended) {
-                        confirm("Delete this room?", "Its chat history is deleted from this phone.", "Delete") { hub?.leave(r.id) }
-                    } else {
-                        confirm(
+                    3 -> when {
+                        r.ended -> confirm("Delete this room?", "Its chat history is deleted from this phone.", "Delete") { hub?.leave(r.id) }
+                        r.owner -> confirm(
+                            "End this room for both?",
+                            "The room and its chat history are deleted on both devices. " +
+                                (if (r.ready) "" else "The other person is offline, so this reaches them when they next connect. ") +
+                                "This cannot be undone.",
+                            "End for both",
+                        ) { hub?.endRoom(r.id) }
+                        else -> confirm(
                             "Leave this room?",
                             "The room and its chat history are deleted from this phone. " +
-                                (if (r.ready) "The other person is told you left. " else "The other person is offline, so they won't be told; they'll just see you as offline. ") +
+                                (if (r.ready) "The owner is told you left. " else "The owner is offline, so they'll just see you as offline. ") +
                                 "To talk again you'll need a new code.",
                             "Leave",
                         ) { hub?.leave(r.id) }
                     }
+                    4 -> confirm(
+                        "Remove the participant?",
+                        "They are removed and their copy is deleted. " +
+                            (if (r.ready) "" else "They are offline, so this takes effect when they next connect. ") +
+                            "You keep the chat history here as a read-only archive.",
+                        "Remove",
+                    ) { hub?.removeParticipant(r.id) }
                 }
                 true
             }
