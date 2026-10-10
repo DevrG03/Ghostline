@@ -19,6 +19,7 @@ import android.text.InputFilter
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -359,7 +360,7 @@ class MainActivity : Activity(), HubUi {
             imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
             filters = arrayOf(InputFilter.LengthFilter(200))
         }
-        input.setOnEditorActionListener { _, _, _ -> addNote(input); true }
+        input.setOnEditorActionListener { _, _, e -> if (e?.action != KeyEvent.ACTION_UP) addNote(input); true }
         composer.addView(input, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { rightMargin = dp(8) })
         composer.addView(iconButton(R.drawable.ic_add, "Add note", tint = Color.WHITE, bg = N_ACCENT, size = 46) { addNote(input) })
         root.addView(composer)
@@ -374,7 +375,7 @@ class MainActivity : Activity(), HubUi {
 
         if (focusNotes) {
             focusNotes = false
-            input.requestFocus()
+            focusLater(input)
         }
         return ScrollView(this).apply {
             setBackgroundColor(N_BG)
@@ -448,7 +449,7 @@ class MainActivity : Activity(), HubUi {
         val open = {
             if (lock.checkPin(field.text.toString())) unlock() else { hideKeyboard(); show(Screen.NOTES) }
         }
-        field.setOnEditorActionListener { _, _, _ -> open(); true }
+        field.setOnEditorActionListener { _, _, e -> if (e?.action != KeyEvent.ACTION_UP) open(); true }
         root.addView(field, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(28) })
         root.addView(button("Open", primary = true) { open() }.apply { background = rounded(N_ACCENT, 14) }.spaced(14, 0))
         root.addView(text("Cancel", 15f, N_MUTED).apply {
@@ -456,9 +457,14 @@ class MainActivity : Activity(), HubUi {
             setPadding(0, dp(14), 0, dp(14))
             setOnClickListener { hideKeyboard(); show(Screen.NOTES) }
         }.spaced(4, 0))
-        field.requestFocus()
-        field.post { getSystemService(InputMethodManager::class.java)?.showSoftInput(field, 0) }
+        focusLater(field)
         return root
+    }
+
+    // Focus a field once it's on screen; asking before it's attached is ignored.
+    private fun focusLater(field: EditText) = field.post {
+        field.requestFocus()
+        getSystemService(InputMethodManager::class.java)?.showSoftInput(field, 0)
     }
 
     private fun hideKeyboard() {
