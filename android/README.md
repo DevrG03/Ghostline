@@ -1,7 +1,8 @@
 # Ghostline for Android
 
 A small native app that joins the same rooms as the web version, using the same invite links,
-encryption and safety code. Chat and voice calls only.
+encryption and safety code. Chat and voice calls; you can see the other person's camera, but the app
+doesn't send your own video yet.
 
 Why it exists: on some phones (seen on a moto g 5G running LineageOS 15), every browser asks the
 audio driver for 32-bit float microphone audio, the driver rejects it, and calls are silent or fail
@@ -31,6 +32,6 @@ Screenshots, screen recording and the app-switcher preview are blocked, and app 
 
 ## Limits
 
-- Voice only: if the other side turns on their camera, the app ignores the video.
+- No camera of your own yet: the other person's video is shown, but the app only sends audio.
 - Keep the app open during a call. Android silences the microphone of apps in the background.
 - Only HTTPS servers work, plus `localhost` for testing over USB.

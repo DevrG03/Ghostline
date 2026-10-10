@@ -30,12 +30,19 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import org.webrtc.EglBase
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
 import java.text.DateFormat
 import java.util.Date
 
 class MainActivity : Activity(), SessionUi {
     private var session: Session? = null
     private lateinit var audio: CallAudio
+    private lateinit var egl: EglBase
+    private var remoteView: SurfaceViewRenderer? = null
+    private var peerVideo = false
+    private var callState = CallState.IDLE
     private var pendingMicAction: (() -> Unit)? = null
     private var verifiedCode: String? = null
     private var currentCode: String? = null
@@ -68,6 +75,7 @@ class MainActivity : Activity(), SessionUi {
         window.navigationBarColor = SURFACE
         Session.init(this)
         audio = CallAudio(this)
+        egl = EglBase.create()
         showHome(intent?.getStringExtra(Intent.EXTRA_TEXT)?.let { Invite.find(it) })
     }
 
@@ -79,6 +87,7 @@ class MainActivity : Activity(), SessionUi {
 
     override fun onDestroy() {
         leaveRoom(showHomeAfter = false)
+        egl.release()
         super.onDestroy()
     }
 
@@ -143,8 +152,10 @@ class MainActivity : Activity(), SessionUi {
         currentCode = null
         ready = false
         muted = false
+        peerVideo = false
+        callState = CallState.IDLE
         buildRoom(invite, showInvite)
-        session = Session(this, invite, this, audio).also { it.start() }
+        session = Session(this, invite, this, audio, egl, remoteView!!).also { it.start() }
     }
 
     private fun leaveRoom(showHomeAfter: Boolean = true) {
@@ -152,6 +163,8 @@ class MainActivity : Activity(), SessionUi {
         session = null
         s.hangUp()
         s.close()
+        remoteView?.release()
+        remoteView = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (showHomeAfter) showHome(null)
     }
@@ -209,7 +222,7 @@ class MainActivity : Activity(), SessionUi {
         incomingPanel = column(pad = 12).apply {
             visibility = View.GONE
             background = rounded(SURFACE, 12, ACCENT)
-            addView(text("Incoming voice call", 16f, TEXT, bold = true))
+            addView(text("Incoming call", 16f, TEXT, bold = true))
             val r = row().spaced(8, 0)
             r.addView(button("Answer", primary = true) { withMic(onDenied = { session?.declineCall() }) { session?.acceptCall() } }, weighted())
             r.addView(button("Decline", danger = true) { session?.declineCall() }, weighted())
@@ -221,6 +234,13 @@ class MainActivity : Activity(), SessionUi {
         callPanel = column(pad = 12).apply {
             visibility = View.GONE
             background = rounded(Color.BLACK, 12)
+            remoteView = SurfaceViewRenderer(this@MainActivity).apply {
+                init(egl.eglBaseContext, null)
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                setEnableHardwareScaler(true)
+                visibility = View.GONE
+            }
+            addView(remoteView, LinearLayout.LayoutParams(MATCH_PARENT, dp(260)).apply { bottomMargin = dp(8) })
             callLabel = text("Calling…", 16f, TEXT, bold = true).apply { gravity = Gravity.CENTER }
             addView(callLabel, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             val r = row().spaced(8, 0)
@@ -371,11 +391,28 @@ class MainActivity : Activity(), SessionUi {
         if (ready) invitePanel.visibility = View.GONE // don't leave the room key on screen
     }
 
+    override fun onPeerVideo(on: Boolean) {
+        if (session == null) return
+        peerVideo = on
+        renderVideo()
+    }
+
+    private fun renderVideo() {
+        val show = peerVideo && callState == CallState.ACTIVE
+        remoteView?.visibility = if (show) View.VISIBLE else View.GONE
+        callLabel.text = when {
+            callState == CallState.OUTGOING -> "Calling…"
+            show -> "Video call (your camera stays off in this app)"
+            else -> "Voice call"
+        }
+    }
+
     override fun onCall(state: CallState) {
         if (session == null) return
+        callState = state
         incomingPanel.visibility = if (state == CallState.INCOMING) View.VISIBLE else View.GONE
         callPanel.visibility = if (state == CallState.OUTGOING || state == CallState.ACTIVE) View.VISIBLE else View.GONE
-        callLabel.text = if (state == CallState.OUTGOING) "Calling…" else "Voice call"
+        renderVideo()
         voiceBtn.isEnabled = ready && state == CallState.IDLE
         if (state == CallState.IDLE) {
             muted = false

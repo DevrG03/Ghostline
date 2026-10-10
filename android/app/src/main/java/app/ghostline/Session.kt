@@ -14,6 +14,9 @@ import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.DataChannel
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.DefaultVideoEncoderFactory
+import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
@@ -23,6 +26,8 @@ import org.webrtc.RtpReceiver
 import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.VideoSink
+import org.webrtc.VideoTrack
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
@@ -40,6 +45,7 @@ interface SessionUi {
     fun onSafety(code: String?)
     fun onReady(ready: Boolean)
     fun onCall(state: CallState)
+    fun onPeerVideo(on: Boolean)
 }
 
 // One room. Speaks the same protocol as public/app.js: encrypted signaling through the
@@ -51,6 +57,8 @@ class Session(
     val invite: Invite,
     private val ui: SessionUi,
     private val audio: CallAudio,
+    egl: EglBase,
+    private val remoteSink: VideoSink,
 ) {
     private val keys = RoomKeys(invite.secret)
     private val main = Handler(Looper.getMainLooper())
@@ -68,9 +76,14 @@ class Session(
             override fun onWebRtcAudioRecordError(msg: String) = system("Microphone error: $msg")
         })
         .createAudioDeviceModule()
+    // Video codecs are needed even though this app doesn't send video: without them,
+    // WebRTC aborts when the other side turns its camera on mid-call.
     private val factory = PeerConnectionFactory.builder()
         .setAudioDeviceModule(adm)
+        .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
+        .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
         .createPeerConnectionFactory()
+    private var remoteVideo: VideoTrack? = null
 
     private var ws: WebSocket? = null
     private var pc: PeerConnection? = null
@@ -320,6 +333,15 @@ class Session(
 
         override fun onDataChannel(ch: DataChannel) = mine { setupDc(ch) }
 
+        override fun onTrack(transceiver: RtpTransceiver) = mine {
+            val track = transceiver.receiver.track()
+            if (track is VideoTrack && track !== remoteVideo) {
+                remoteVideo?.removeSink(remoteSink)
+                remoteVideo = track
+                track.addSink(remoteSink)
+            }
+        }
+
         override fun onSignalingChange(s: PeerConnection.SignalingState) {
             if (s == PeerConnection.SignalingState.STABLE) mine { updateSafetyCode(it) }
         }
@@ -384,6 +406,8 @@ class Session(
         ch?.unregisterObserver()
         ch?.close()
         ch?.dispose()
+        remoteVideo?.removeSink(remoteSink)
+        remoteVideo = null
         val p = pc
         pc = null
         p?.dispose()
@@ -461,10 +485,12 @@ class Session(
                     return
                 }
                 setCall(CallState.INCOMING)
+                peerVideo(m.optBoolean("video"))
             }
             "accept" -> {
                 if (call != CallState.OUTGOING) return
                 setCall(CallState.ACTIVE)
+                peerVideo(m.optBoolean("video"))
                 attachTracks()
             }
             "decline", "busy" -> {
@@ -477,11 +503,13 @@ class Session(
                 endCall(false)
                 system("Call ended.")
             }
-            // "video": this app is voice-only, so the other side's camera is ignored.
+            "video" -> peerVideo(m.optBoolean("on"))
         }
     }
 
     // ---------- calls (voice) ----------
+
+    private fun peerVideo(on: Boolean) = ui { onPeerVideo(on) }
 
     private fun setCall(state: CallState) {
         call = state
@@ -547,6 +575,7 @@ class Session(
         if (call != CallState.IDLE) {
             main.post { audio.stop() }
             setCall(CallState.IDLE)
+            peerVideo(false)
         }
     }
 
