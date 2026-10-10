@@ -1,4 +1,4 @@
-package app.ghostline
+package app.plainnotes
 
 import android.content.Context
 import android.os.Handler
@@ -42,6 +42,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import javax.crypto.SecretKey
 
 enum class CallState { IDLE, OUTGOING, INCOMING, ACTIVE }
 
@@ -75,9 +76,11 @@ class Hub(
     private val egl: EglBase,
     private val remoteSink: VideoSink,
     private val localSink: VideoSink,
+    dataKey: SecretKey? = null, // with the Notes disguise on, the key the PIN unwrapped
 ) {
     private val appContext = context.applicationContext
-    private val store = Store(appContext)
+    private val store = Store(appContext, dataKey)
+    private val closedLatch = CountDownLatch(1)
     private val main = Handler(Looper.getMainLooper())
     private val exec = Executors.newSingleThreadScheduledExecutor()
     private val http = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
@@ -175,10 +178,14 @@ class Hub(
             closed = true
             factory.dispose()
             adm.release()
+            closedLatch.countDown()
         }
         exec.shutdown()
         http.dispatcher.executorService.shutdown()
     }
+
+    // Blocks until close() has finished, including any saves queued before it.
+    fun awaitClosed() = closedLatch.await(10, TimeUnit.SECONDS)
 
     // ---------- plumbing ----------
 
@@ -224,12 +231,12 @@ class Hub(
     // ---------- storage ----------
 
     private fun loadRooms() {
-        val arr = store.read("rooms")?.let { JSONArray(it) } ?: JSONArray()
+        val arr = store.read(ROOMS)?.let { JSONArray(it) } ?: JSONArray()
         for (i in 0 until arr.length()) {
             try {
                 val rec = RoomRec.from(arr.getJSONObject(i))
-                val msgs = store.read("msgs-${rec.id}")?.let { JSONArray(it) } ?: JSONArray()
-                val cert = store.read("cert-${rec.id}")?.let { JSONObject(it) }
+                val msgs = store.read("$MSGS${rec.id}")?.let { JSONArray(it) } ?: JSONArray()
+                val cert = store.read("$CERT${rec.id}")?.let { JSONObject(it) }
                     ?.let { RtcCertificatePem(it.getString("key"), it.getString("cert")) }
                 val room = Room(rec, cert)
                 for (j in 0 until msgs.length()) Msg.from(msgs.getJSONObject(j))?.let { room.msgs.add(it) }
@@ -243,7 +250,7 @@ class Hub(
     }
 
     private fun saveRooms() {
-        store.write("rooms", JSONArray(rooms.values.map { it.rec.json() }).toString())
+        store.write(ROOMS, JSONArray(rooms.values.map { it.rec.json() }).toString())
     }
 
     // ---------- server connection (one WebSocket for every room) ----------
@@ -373,7 +380,7 @@ class Hub(
         var peerId: String? = null
         var peerSeq = 0L
 
-        fun saveMsgs() = store.write("msgs-$id", JSONArray(msgs.map { it.json() }).toString())
+        fun saveMsgs() = store.write("$MSGS$id", JSONArray(msgs.map { it.json() }).toString())
         fun join() { if (!rec.ended) sendServer(JSONObject().put("type", "join").put("room", id)) }
         fun dcOpen() = dc?.state() == DataChannel.State.OPEN
 
@@ -700,7 +707,7 @@ class Hub(
         rooms[keys.roomId]?.let { return it }
         val cert = try {
             RtcCertificatePem.generateCertificate(PeerConnection.KeyType.ECDSA, 10L * 365 * 24 * 3600).also {
-                store.write("cert-${keys.roomId}", JSONObject().put("key", it.privateKey).put("cert", it.certificate).toString())
+                store.write("$CERT${keys.roomId}", JSONObject().put("key", it.privateKey).put("cert", it.certificate).toString())
             }
         } catch (e: Exception) {
             Log.w(TAG, "no saved certificate", e)
@@ -724,8 +731,8 @@ class Hub(
         rooms.remove(roomId)
         saveRooms()
         sendServer(JSONObject().put("type", "leave").put("room", roomId))
-        store.delete("msgs-$roomId")
-        store.delete("cert-$roomId")
+        store.delete("$MSGS$roomId")
+        store.delete("$CERT$roomId")
         notice?.let { n -> main.post { if (!closed) ui.onNotice(n) } }
         publish()
     }
@@ -937,7 +944,7 @@ class Hub(
     private fun ensureMic() {
         if (audioTrack != null) return
         audioSource = factory.createAudioSource(MediaConstraints())
-        audioTrack = factory.createAudioTrack("ghostline-audio", audioSource)
+        audioTrack = factory.createAudioTrack("audio0", audioSource)
     }
 
     // Reuse existing transceivers so repeated calls don't grow the connection (like the web app).
@@ -949,12 +956,12 @@ class Hub(
             val free = p.transceivers.firstOrNull { it.mediaType == type && it.sender.track() == null && !it.isStopped }
             if (free != null) {
                 free.sender.setTrack(track, false)
-                free.sender.setStreams(listOf("ghostline"))
+                free.sender.setStreams(listOf("stream0"))
                 if (free.direction != RtpTransceiver.RtpTransceiverDirection.SEND_RECV) {
                     free.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
                 }
             } else {
-                p.addTrack(track, listOf("ghostline"))
+                p.addTrack(track, listOf("stream0"))
             }
         }
     }
@@ -968,11 +975,11 @@ class Hub(
                 ?: cams.deviceNames.firstOrNull() ?: return false
             frontCamera = cams.isFrontFacing(name)
             val cap = cams.createCapturer(name, null) ?: return false
-            val helper = SurfaceTextureHelper.create("ghostline-camera", egl.eglBaseContext)
+            val helper = SurfaceTextureHelper.create("camera", egl.eglBaseContext)
             val source = factory.createVideoSource(false)
             cap.initialize(helper, appContext, source.capturerObserver)
             cap.startCapture(1280, 720, 30)
-            val track = factory.createVideoTrack("ghostline-video", source)
+            val track = factory.createVideoTrack("video0", source)
             track.addSink(localSink)
             camera = cap
             cameraHelper = helper
@@ -1077,7 +1084,11 @@ class Hub(
     )
 
     companion object {
-        private const val TAG = "Ghostline"
+        private const val TAG = "Notes" // shows in logcat, so nothing that names the app
+        // file names in the app's storage, kept neutral for the same reason
+        private const val ROOMS = "index"
+        private const val MSGS = "n-"
+        private const val CERT = "c-"
         private const val PAD_BLOCK = 256
 
         @Volatile private var initialized = false

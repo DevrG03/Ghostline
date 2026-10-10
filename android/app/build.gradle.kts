@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "app.ghostline"
+    namespace = "app.plainnotes"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.ghostline"
+        applicationId = "app.plainnotes"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

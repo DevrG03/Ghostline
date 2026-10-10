@@ -17,12 +17,12 @@ Not listed (generated, binary, or a lockfile, so not hand-written source): `andr
 - [`android/.gitignore`](#androidgitignore) — 8 lines
 - [`android/app/build.gradle.kts`](#androidappbuildgradlekts) — 39 lines
 - [`android/app/src/main/AndroidManifest.xml`](#androidappsrcmainandroidmanifestxml) — 39 lines
-- [`android/app/src/main/java/app/ghostline/CallAudio.kt`](#androidappsrcmainjavaappghostlinecallaudiokt) — 40 lines
-- [`android/app/src/main/java/app/ghostline/Crypto.kt`](#androidappsrcmainjavaappghostlinecryptokt) — 146 lines
-- [`android/app/src/main/java/app/ghostline/Hub.kt`](#androidappsrcmainjavaappghostlinehubkt) — 1093 lines
-- [`android/app/src/main/java/app/ghostline/Lock.kt`](#androidappsrcmainjavaappghostlinelockkt) — 58 lines
-- [`android/app/src/main/java/app/ghostline/MainActivity.kt`](#androidappsrcmainjavaappghostlinemainactivitykt) — 1342 lines
-- [`android/app/src/main/java/app/ghostline/Store.kt`](#androidappsrcmainjavaappghostlinestorekt) — 65 lines
+- [`android/app/src/main/java/app/plainnotes/CallAudio.kt`](#androidappsrcmainjavaappplainnotescallaudiokt) — 40 lines
+- [`android/app/src/main/java/app/plainnotes/Crypto.kt`](#androidappsrcmainjavaappplainnotescryptokt) — 146 lines
+- [`android/app/src/main/java/app/plainnotes/Hub.kt`](#androidappsrcmainjavaappplainnoteshubkt) — 1104 lines
+- [`android/app/src/main/java/app/plainnotes/Lock.kt`](#androidappsrcmainjavaappplainnoteslockkt) — 121 lines
+- [`android/app/src/main/java/app/plainnotes/MainActivity.kt`](#androidappsrcmainjavaappplainnotesmainactivitykt) — 1439 lines
+- [`android/app/src/main/java/app/plainnotes/Store.kt`](#androidappsrcmainjavaappplainnotesstorekt) — 85 lines
 - [`android/app/src/main/res/drawable/ic_add.xml`](#androidappsrcmainresdrawableic_addxml) — 3 lines
 - [`android/app/src/main/res/drawable/ic_back.xml`](#androidappsrcmainresdrawableic_backxml) — 3 lines
 - [`android/app/src/main/res/drawable/ic_call.xml`](#androidappsrcmainresdrawableic_callxml) — 3 lines
@@ -41,12 +41,13 @@ Not listed (generated, binary, or a lockfile, so not hand-written source): `andr
 - [`android/app/src/main/res/drawable/ic_video.xml`](#androidappsrcmainresdrawableic_videoxml) — 3 lines
 - [`android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`](#androidappsrcmainresmipmap-anydpi-v26ic_launcherxml) — 6 lines
 - [`android/app/src/main/res/xml/network_security_config.xml`](#androidappsrcmainresxmlnetwork_security_configxml) — 9 lines
-- [`android/app/src/test/java/app/ghostline/CryptoTest.kt`](#androidappsrctestjavaappghostlinecryptotestkt) — 72 lines
+- [`android/app/src/test/java/app/plainnotes/CryptoTest.kt`](#androidappsrctestjavaappplainnotescryptotestkt) — 72 lines
+- [`android/app/src/test/java/app/plainnotes/LockTest.kt`](#androidappsrctestjavaappplainnoteslocktestkt) — 28 lines
 - [`android/build.gradle.kts`](#androidbuildgradlekts) — 4 lines
 - [`android/gradle.properties`](#androidgradleproperties) — 4 lines
 - [`android/settings.gradle.kts`](#androidsettingsgradlekts) — 16 lines
 
-**39 files, 5100 lines.**
+**40 files, 5319 lines.**
 
 
 ## `server.js`
@@ -2235,11 +2236,11 @@ plugins {
 }
 
 android {
-    namespace = "app.ghostline"
+    namespace = "app.plainnotes"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.ghostline"
+        applicationId = "app.plainnotes"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -2318,12 +2319,12 @@ dependencies {
 ```
 
 
-## `android/app/src/main/java/app/ghostline/CallAudio.kt`
+## `android/app/src/main/java/app/plainnotes/CallAudio.kt`
 
-<a id="androidappsrcmainjavaappghostlinecallaudiokt"></a>
+<a id="androidappsrcmainjavaappplainnotescallaudiokt"></a>
 
 ```kotlin
-package app.ghostline
+package app.plainnotes
 
 import android.content.Context
 import android.media.AudioDeviceInfo
@@ -2366,12 +2367,12 @@ class CallAudio(context: Context) {
 ```
 
 
-## `android/app/src/main/java/app/ghostline/Crypto.kt`
+## `android/app/src/main/java/app/plainnotes/Crypto.kt`
 
-<a id="androidappsrcmainjavaappghostlinecryptokt"></a>
+<a id="androidappsrcmainjavaappplainnotescryptokt"></a>
 
 ```kotlin
-package app.ghostline
+package app.plainnotes
 
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
@@ -2520,12 +2521,12 @@ object Pairing {
 ```
 
 
-## `android/app/src/main/java/app/ghostline/Hub.kt`
+## `android/app/src/main/java/app/plainnotes/Hub.kt`
 
-<a id="androidappsrcmainjavaappghostlinehubkt"></a>
+<a id="androidappsrcmainjavaappplainnoteshubkt"></a>
 
 ```kotlin
-package app.ghostline
+package app.plainnotes
 
 import android.content.Context
 import android.os.Handler
@@ -2569,6 +2570,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import javax.crypto.SecretKey
 
 enum class CallState { IDLE, OUTGOING, INCOMING, ACTIVE }
 
@@ -2602,9 +2604,11 @@ class Hub(
     private val egl: EglBase,
     private val remoteSink: VideoSink,
     private val localSink: VideoSink,
+    dataKey: SecretKey? = null, // with the Notes disguise on, the key the PIN unwrapped
 ) {
     private val appContext = context.applicationContext
-    private val store = Store(appContext)
+    private val store = Store(appContext, dataKey)
+    private val closedLatch = CountDownLatch(1)
     private val main = Handler(Looper.getMainLooper())
     private val exec = Executors.newSingleThreadScheduledExecutor()
     private val http = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
@@ -2702,10 +2706,14 @@ class Hub(
             closed = true
             factory.dispose()
             adm.release()
+            closedLatch.countDown()
         }
         exec.shutdown()
         http.dispatcher.executorService.shutdown()
     }
+
+    // Blocks until close() has finished, including any saves queued before it.
+    fun awaitClosed() = closedLatch.await(10, TimeUnit.SECONDS)
 
     // ---------- plumbing ----------
 
@@ -2751,12 +2759,12 @@ class Hub(
     // ---------- storage ----------
 
     private fun loadRooms() {
-        val arr = store.read("rooms")?.let { JSONArray(it) } ?: JSONArray()
+        val arr = store.read(ROOMS)?.let { JSONArray(it) } ?: JSONArray()
         for (i in 0 until arr.length()) {
             try {
                 val rec = RoomRec.from(arr.getJSONObject(i))
-                val msgs = store.read("msgs-${rec.id}")?.let { JSONArray(it) } ?: JSONArray()
-                val cert = store.read("cert-${rec.id}")?.let { JSONObject(it) }
+                val msgs = store.read("$MSGS${rec.id}")?.let { JSONArray(it) } ?: JSONArray()
+                val cert = store.read("$CERT${rec.id}")?.let { JSONObject(it) }
                     ?.let { RtcCertificatePem(it.getString("key"), it.getString("cert")) }
                 val room = Room(rec, cert)
                 for (j in 0 until msgs.length()) Msg.from(msgs.getJSONObject(j))?.let { room.msgs.add(it) }
@@ -2770,7 +2778,7 @@ class Hub(
     }
 
     private fun saveRooms() {
-        store.write("rooms", JSONArray(rooms.values.map { it.rec.json() }).toString())
+        store.write(ROOMS, JSONArray(rooms.values.map { it.rec.json() }).toString())
     }
 
     // ---------- server connection (one WebSocket for every room) ----------
@@ -2900,7 +2908,7 @@ class Hub(
         var peerId: String? = null
         var peerSeq = 0L
 
-        fun saveMsgs() = store.write("msgs-$id", JSONArray(msgs.map { it.json() }).toString())
+        fun saveMsgs() = store.write("$MSGS$id", JSONArray(msgs.map { it.json() }).toString())
         fun join() { if (!rec.ended) sendServer(JSONObject().put("type", "join").put("room", id)) }
         fun dcOpen() = dc?.state() == DataChannel.State.OPEN
 
@@ -3227,7 +3235,7 @@ class Hub(
         rooms[keys.roomId]?.let { return it }
         val cert = try {
             RtcCertificatePem.generateCertificate(PeerConnection.KeyType.ECDSA, 10L * 365 * 24 * 3600).also {
-                store.write("cert-${keys.roomId}", JSONObject().put("key", it.privateKey).put("cert", it.certificate).toString())
+                store.write("$CERT${keys.roomId}", JSONObject().put("key", it.privateKey).put("cert", it.certificate).toString())
             }
         } catch (e: Exception) {
             Log.w(TAG, "no saved certificate", e)
@@ -3251,8 +3259,8 @@ class Hub(
         rooms.remove(roomId)
         saveRooms()
         sendServer(JSONObject().put("type", "leave").put("room", roomId))
-        store.delete("msgs-$roomId")
-        store.delete("cert-$roomId")
+        store.delete("$MSGS$roomId")
+        store.delete("$CERT$roomId")
         notice?.let { n -> main.post { if (!closed) ui.onNotice(n) } }
         publish()
     }
@@ -3464,7 +3472,7 @@ class Hub(
     private fun ensureMic() {
         if (audioTrack != null) return
         audioSource = factory.createAudioSource(MediaConstraints())
-        audioTrack = factory.createAudioTrack("ghostline-audio", audioSource)
+        audioTrack = factory.createAudioTrack("audio0", audioSource)
     }
 
     // Reuse existing transceivers so repeated calls don't grow the connection (like the web app).
@@ -3476,12 +3484,12 @@ class Hub(
             val free = p.transceivers.firstOrNull { it.mediaType == type && it.sender.track() == null && !it.isStopped }
             if (free != null) {
                 free.sender.setTrack(track, false)
-                free.sender.setStreams(listOf("ghostline"))
+                free.sender.setStreams(listOf("stream0"))
                 if (free.direction != RtpTransceiver.RtpTransceiverDirection.SEND_RECV) {
                     free.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
                 }
             } else {
-                p.addTrack(track, listOf("ghostline"))
+                p.addTrack(track, listOf("stream0"))
             }
         }
     }
@@ -3495,11 +3503,11 @@ class Hub(
                 ?: cams.deviceNames.firstOrNull() ?: return false
             frontCamera = cams.isFrontFacing(name)
             val cap = cams.createCapturer(name, null) ?: return false
-            val helper = SurfaceTextureHelper.create("ghostline-camera", egl.eglBaseContext)
+            val helper = SurfaceTextureHelper.create("camera", egl.eglBaseContext)
             val source = factory.createVideoSource(false)
             cap.initialize(helper, appContext, source.capturerObserver)
             cap.startCapture(1280, 720, 30)
-            val track = factory.createVideoTrack("ghostline-video", source)
+            val track = factory.createVideoTrack("video0", source)
             track.addSink(localSink)
             camera = cap
             cameraHelper = helper
@@ -3604,7 +3612,11 @@ class Hub(
     )
 
     companion object {
-        private const val TAG = "Ghostline"
+        private const val TAG = "Notes" // shows in logcat, so nothing that names the app
+        // file names in the app's storage, kept neutral for the same reason
+        private const val ROOMS = "index"
+        private const val MSGS = "n-"
+        private const val CERT = "c-"
         private const val PAD_BLOCK = 256
 
         @Volatile private var initialized = false
@@ -3621,78 +3633,141 @@ class Hub(
 ```
 
 
-## `android/app/src/main/java/app/ghostline/Lock.kt`
+## `android/app/src/main/java/app/plainnotes/Lock.kt`
 
-<a id="androidappsrcmainjavaappghostlinelockkt"></a>
+<a id="androidappsrcmainjavaappplainnoteslockkt"></a>
 
 ```kotlin
-package app.ghostline
+package app.plainnotes
 
 import android.content.Context
 import android.util.Log
 import org.json.JSONObject
 import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 
 // The Notes disguise. When it's on, the app opens as a plain notes list; adding a note that is the
-// secret phrase asks for the PIN, and only the right PIN shows Ghostline. Both are kept as salted
-// hashes in the encrypted store, never as text.
+// secret phrase asks for the PIN, and only the right PIN shows Ghostline.
+//
+// The PIN also guards the data: rooms and history are encrypted with a random data key, kept only
+// wrapped by a key derived from the phrase and PIN. Without both, the files can't be read, even by
+// this app. The phrase has its own quick salted hash so a note can be recognised as it's added;
+// the PIN is checked by whether it unwraps the data key, so no hash of it is stored.
 class Lock(context: Context) {
-    private val store = Store(context)
-    private var cfg: JSONObject? = try {
-        store.read(FILE)?.let { JSONObject(it) }
+    private val appContext = context.applicationContext
+    private val device = Store(appContext) // the disguise's own settings use the Keystore key
+    @Volatile private var cfg: JSONObject? = try {
+        device.read(FILE)?.let { JSONObject(it) }
     } catch (e: Exception) {
-        Log.e("Lock", "could not read the disguise settings", e)
+        Log.e("Notes", "could not read the disguise settings", e)
         null
     }
 
+    // the unwrapped data key, only while unlocked
+    @Volatile var dataKey: SecretKey? = null
+        private set
+
     val enabled get() = cfg != null
 
-    fun isPhrase(text: String) = cfg?.let { matches(it, "phrase", normalize(text)) } ?: false
-    fun checkPin(pin: String) = cfg?.let { matches(it, "pin", pin) } ?: false
+    fun isPhrase(text: String) = cfg?.let { c ->
+        val salt = Crypto.unb64u(c.getString("salt"))
+        MessageDigest.isEqual(pbkdf2("phrase:${normalize(text)}", salt, PHRASE_ROUNDS), Crypto.unb64u(c.getString("phrase")))
+    } ?: false
 
+    // Slow (key derivation and maybe re-encryption): call off the main thread. false for a wrong PIN.
+    fun unlock(phrase: String, pin: String): Boolean {
+        val c = cfg ?: return false
+        if (!c.has("wrap")) {
+            // set up before the PIN protected the data: check the old hash, then move the data over
+            val salt = Crypto.unb64u(c.getString("salt"))
+            if (!MessageDigest.isEqual(pbkdf2("pin:$pin", salt, PHRASE_ROUNDS), Crypto.unb64u(c.getString("pin")))) return false
+            set(phrase, pin)
+            return true
+        }
+        val key = unwrap(Crypto.unb64u(c.getString("wrap")), phrase, pin, Crypto.unb64u(c.getString("kdfSalt"))) ?: return false
+        dataKey = key
+        // finishes a switch that was interrupted, leaving files on the Keystore key
+        Store(appContext, key).rekey(device)
+        return true
+    }
+
+    // Turns the disguise on, or changes the phrase and PIN while unlocked. Slow: call off the main
+    // thread, with nothing else writing to the store. Changing the PIN only re-wraps the data key.
     fun set(phrase: String, pin: String) {
+        val key = dataKey ?: SecretKeySpec(Crypto.randomBytes(32), "AES")
         val salt = Crypto.randomBytes(16)
+        val kdfSalt = Crypto.randomBytes(16)
         val c = JSONObject()
             .put("salt", Crypto.b64u(salt))
-            .put("phrase", Crypto.b64u(hash("phrase", normalize(phrase), salt)))
-            .put("pin", Crypto.b64u(hash("pin", pin, salt)))
-        store.write(FILE, c.toString())
+            .put("phrase", Crypto.b64u(pbkdf2("phrase:${normalize(phrase)}", salt, PHRASE_ROUNDS)))
+            .put("kdfSalt", Crypto.b64u(kdfSalt))
+            .put("wrap", Crypto.b64u(wrap(key, phrase, pin, kdfSalt)))
+        // settings first: if this is interrupted, the next unlock finishes moving the files
+        device.write(FILE, c.toString())
         cfg = c
+        dataKey = key
+        Store(appContext, key).rekey(device)
     }
 
+    // Turns the disguise off, moving the data back to the Keystore key. Same rules as set().
     fun disable() {
-        store.delete(FILE)
+        dataKey?.let { device.rekey(Store(appContext, it)) }
+        device.delete(FILE)
         cfg = null
+        dataKey = null
     }
 
-    private fun matches(c: JSONObject, field: String, value: String): Boolean {
-        val salt = Crypto.unb64u(c.getString("salt"))
-        return MessageDigest.isEqual(hash(field, value, salt), Crypto.unb64u(c.getString(field)))
+    fun relock() {
+        dataKey = null
     }
-
-    private fun hash(field: String, value: String, salt: ByteArray): ByteArray =
-        SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-            .generateSecret(PBEKeySpec("$field:$value".toCharArray(), salt, 20_000, 256))
-            .encoded
 
     companion object {
-        private const val FILE = "lock"
+        const val FILE = "prefs" // a neutral name, like everything in storage
+        private const val PHRASE_ROUNDS = 20_000 // checked on every note added, so kept quick
+        private const val KEY_ROUNDS = 200_000 // once per unlock
 
         // so the keyboard's auto-capitals or a stray space don't stop the phrase working
         fun normalize(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ")
+
+        private fun pbkdf2(value: String, salt: ByteArray, rounds: Int): ByteArray =
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+                .generateSecret(PBEKeySpec(value.toCharArray(), salt, rounds, 256))
+                .encoded
+
+        private fun wrapKey(phrase: String, pin: String, salt: ByteArray) =
+            SecretKeySpec(pbkdf2("key:${normalize(phrase)}:$pin", salt, KEY_ROUNDS), "AES")
+
+        fun wrap(key: SecretKey, phrase: String, pin: String, salt: ByteArray): ByteArray {
+            val iv = Crypto.randomBytes(12)
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.ENCRYPT_MODE, wrapKey(phrase, pin, salt), GCMParameterSpec(128, iv))
+            return iv + c.doFinal(key.encoded)
+        }
+
+        // null for the wrong phrase or PIN
+        fun unwrap(wrapped: ByteArray, phrase: String, pin: String, salt: ByteArray): SecretKey? = try {
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, wrapKey(phrase, pin, salt), GCMParameterSpec(128, wrapped, 0, 12))
+            SecretKeySpec(c.doFinal(wrapped, 12, wrapped.size - 12), "AES")
+        } catch (e: Exception) {
+            null
+        }
     }
 }
 ```
 
 
-## `android/app/src/main/java/app/ghostline/MainActivity.kt`
+## `android/app/src/main/java/app/plainnotes/MainActivity.kt`
 
-<a id="androidappsrcmainjavaappghostlinemainactivitykt"></a>
+<a id="androidappsrcmainjavaappplainnotesmainactivitykt"></a>
 
 ```kotlin
-package app.ghostline
+package app.plainnotes
 
 import android.Manifest
 import android.app.Activity
@@ -3713,6 +3788,7 @@ import android.text.InputFilter
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
+import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -3742,6 +3818,7 @@ import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import java.text.DateFormat
 import java.util.Date
+import kotlin.concurrent.thread
 
 class MainActivity : Activity(), HubUi {
     private enum class Screen { NOTES, PIN, HOME, PAIR, ROOM, DISGUISE }
@@ -3750,6 +3827,9 @@ class MainActivity : Activity(), HubUi {
     private var locked = false // showing the Notes disguise; Ghostline isn't connected
     private var disguiseEditing = false
     private var focusNotes = false
+    private var pendingPhrase: String? = null // the phrase note that led to the PIN screen
+    private var working = false // re-encrypting the rooms; the hub is stopped meanwhile
+    private var started = false
     private var hub: Hub? = null
     private lateinit var audio: CallAudio
     private lateinit var egl: EglBase
@@ -3812,14 +3892,17 @@ class MainActivity : Activity(), HubUi {
 
     override fun onStart() {
         super.onStart()
+        started = true
         hub?.setForeground(true)
     }
 
     override fun onStop() {
+        started = false
         hub?.setForeground(false)
-        // With the disguise on, leaving the app locks it again, unless a call is going on.
+        // With the disguise on, leaving the app locks it again, unless a call is going on. While
+        // re-encrypting it waits, and locks once that's done.
         val call = view?.call
-        if (lock.enabled && !locked && (call == null || !inCall(call))) relock()
+        if (lock.enabled && !locked && !working && (call == null || !inCall(call))) relock()
         else if (screen == Screen.PIN) show(Screen.NOTES)
         super.onStop()
     }
@@ -3827,12 +3910,15 @@ class MainActivity : Activity(), HubUi {
     private fun unlock() {
         hideKeyboard()
         locked = false
+        pendingPhrase = null
         startHub()
         show(Screen.HOME)
     }
 
     private fun relock() {
         locked = true
+        pendingPhrase = null
+        lock.relock()
         hub?.close()
         hub = null
         view = null
@@ -3842,7 +3928,6 @@ class MainActivity : Activity(), HubUi {
         callBar.visibility = View.GONE
         callScreen.visibility = View.GONE
         setCallFullScreen(false)
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         show(Screen.NOTES)
     }
 
@@ -3880,7 +3965,7 @@ class MainActivity : Activity(), HubUi {
         hub = null
         val origin = server()
         if (origin.isEmpty()) return
-        hub = Hub(this, origin, this, audio, egl, remoteView, localView).also { it.start() }
+        hub = Hub(this, origin, this, audio, egl, remoteView, localView, lock.dataKey).also { it.start() }
     }
 
     override fun onView(view: HubView) {
@@ -3916,11 +4001,22 @@ class MainActivity : Activity(), HubUi {
         messages = null
         content.removeAllViews()
         setBars(light = s == Screen.NOTES || s == Screen.PIN)
+        keepScreenOn()
         if (s == Screen.ROOM) content.addView(buildRoom())
         render()
     }
 
     private fun render() {
+        if (working) {
+            rebuildIfChanged("working") {
+                column(pad = 32).apply {
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(BG)
+                    addView(text("Encrypting your rooms…", 16f, MUTED).apply { gravity = Gravity.CENTER })
+                }
+            }
+            return
+        }
         when (screen) {
             Screen.NOTES -> rebuildIfChanged("notes|" + notes()) { buildNotes() }
             Screen.PIN -> rebuildIfChanged("pin") { buildPin() }
@@ -3965,7 +4061,7 @@ class MainActivity : Activity(), HubUi {
         if (server().isEmpty()) {
             val box = column(pad = 20)
             box.addView(text("Enter your Ghostline server to start.", 15f, MUTED).spaced(0, 8))
-            val field = field("https://ghostline-xxxx.onrender.com", "")
+            val field = field("https://your-server.example.com", "")
             field.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             box.addView(field)
             box.addView(button("Save", primary = true) { saveServer(field.text.toString()) }.spaced(12, 0))
@@ -4111,6 +4207,7 @@ class MainActivity : Activity(), HubUi {
         if (t.isEmpty()) return
         input.setText("")
         if (lock.isPhrase(t)) {
+            pendingPhrase = t
             show(Screen.PIN)
             return
         }
@@ -4140,12 +4237,39 @@ class MainActivity : Activity(), HubUi {
             background = rounded(Color.WHITE, 12, N_LINE)
             setPadding(dp(14), dp(14), dp(14), dp(14))
         }
-        val open = {
-            if (lock.checkPin(field.text.toString())) unlock() else { hideKeyboard(); show(Screen.NOTES) }
+        lateinit var openButton: Button
+        // Unwrapping the data key takes a moment, so it runs off the main thread.
+        val open: () -> Unit = open@{
+            if (!field.isEnabled) return@open
+            val phrase = pendingPhrase.orEmpty()
+            val pin = field.text.toString()
+            field.isEnabled = false
+            openButton.isEnabled = false
+            openButton.text = "Opening…"
+            thread {
+                val ok = try {
+                    lock.unlock(phrase, pin)
+                } catch (e: Exception) {
+                    Log.e("Notes", "unlock failed", e)
+                    false
+                }
+                runOnUiThread {
+                    if (ok && screen == Screen.PIN && started) {
+                        unlock()
+                    } else {
+                        lock.relock() // also if they left while it was opening
+                        if (screen == Screen.PIN) {
+                            hideKeyboard()
+                            show(Screen.NOTES)
+                        }
+                    }
+                }
+            }
         }
         field.setOnEditorActionListener { _, _, e -> if (e?.action != KeyEvent.ACTION_UP) open(); true }
         root.addView(field, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(28) })
-        root.addView(button("Open", primary = true) { open() }.apply { background = rounded(N_ACCENT, 14) }.spaced(14, 0))
+        openButton = button("Open", primary = true) { open() }.apply { background = rounded(N_ACCENT, 14) }
+        root.addView(openButton.spaced(14, 0))
         root.addView(text("Cancel", 15f, N_MUTED).apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(14), 0, dp(14))
@@ -4179,15 +4303,19 @@ class MainActivity : Activity(), HubUi {
         if (lock.enabled && !disguiseEditing) {
             body.addView(text(
                 "On. Ghostline opens as a Notes app. To get in, add a note that is your secret phrase, then enter your PIN.\n\n" +
+                    "Your rooms are encrypted with a key that only your phrase and PIN can unlock. " +
                     "It locks again whenever you leave the app, except during a call. While locked you are offline, " +
                     "so messages arrive when you next open it.",
                 15f, MUTED,
             ).apply { setLineSpacing(0f, 1.15f) })
             body.addView(button("Change phrase and PIN") { disguiseEditing = true; render() }.spaced(20, 0))
             body.addView(button("Turn off", danger = true) {
-                confirm("Turn off the disguise?", "Ghostline will open normally again.", "Turn off") {
-                    lock.disable()
-                    render()
+                confirm(
+                    "Turn off the disguise?",
+                    "Ghostline will open normally again, and your rooms will no longer need the PIN to be read.",
+                    "Turn off",
+                ) {
+                    rekeying({ lock.disable() }) { show(Screen.DISGUISE) }
                 }
             }.spaced(10, 0))
             return scroll(root)
@@ -4195,7 +4323,8 @@ class MainActivity : Activity(), HubUi {
 
         body.addView(text(
             "Ghostline will open as a Notes app. Typing your secret phrase as a new note asks for your PIN, and the right PIN opens Ghostline.\n\n" +
-                "Pick a phrase you would never write as a real note. If you forget it, the only way back in is to clear the app's data, which deletes your rooms.",
+                "Your rooms will be encrypted with a key that only your phrase and PIN unlock. Pick a phrase you would never write as a real note. " +
+                "If you forget either one, nobody can recover your rooms; the only way back in is to clear the app's data, which deletes them.",
             15f, MUTED,
         ).apply { setLineSpacing(0f, 1.15f) })
         val phrase = field("Secret phrase", "").apply {
@@ -4221,14 +4350,50 @@ class MainActivity : Activity(), HubUi {
                 !Regex("^\\d{4,12}$").matches(p) -> toast("The PIN needs 4 to 12 digits.")
                 p != again.text.toString() -> toast("The PINs don't match.")
                 else -> {
-                    lock.set(phrase.text.toString(), p)
-                    hideKeyboard()
-                    toast("Disguise on. It takes effect when you leave the app.")
-                    show(Screen.HOME)
+                    val ph = phrase.text.toString()
+                    val changing = lock.enabled
+                    rekeying({ lock.set(ph, p) }) {
+                        toast(if (changing) "Phrase and PIN changed." else "Disguise on. It takes effect when you leave the app.")
+                        show(Screen.HOME)
+                    }
                 }
             }
         }.spaced(16, 0))
         return scroll(root)
+    }
+
+    // Re-encrypting must not race the hub's own saves, so the hub is stopped while it runs.
+    private fun rekeying(work: () -> Unit, done: () -> Unit) {
+        val call = view?.call
+        if (call != null && call.state != CallState.IDLE) {
+            toast("Finish the call first.")
+            return
+        }
+        hideKeyboard()
+        val h = hub
+        hub = null
+        view = null
+        h?.close()
+        working = true
+        render()
+        thread {
+            h?.awaitClosed()
+            val ok = try {
+                work()
+                true
+            } catch (e: Exception) {
+                Log.e("Notes", "re-encrypting failed", e)
+                false
+            }
+            runOnUiThread {
+                working = false
+                if (!ok) toast("Couldn't finish. Please try again.")
+                if (!started && lock.enabled) relock() else {
+                    startHub()
+                    done()
+                }
+            }
+        }
     }
 
     // Light bars for the Notes disguise, dark ones for Ghostline.
@@ -4809,10 +4974,17 @@ class MainActivity : Activity(), HubUi {
         flipBtn.isEnabled = c.myVideo
         flipBtn.alpha = if (c.myVideo) 1f else 0.35f
         setCallFullScreen(full)
-        if (c.state == CallState.IDLE) {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
+        keepScreenOn()
+    }
+
+    // During a call, and while pairing: the screen timing out would lock the app (with the disguise
+    // on) and so break off the pairing.
+    private fun keepScreenOn() {
+        val c = view?.call
+        if (screen == Screen.PAIR || (c != null && c.state != CallState.IDLE)) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
@@ -5037,12 +5209,12 @@ class MainActivity : Activity(), HubUi {
 ```
 
 
-## `android/app/src/main/java/app/ghostline/Store.kt`
+## `android/app/src/main/java/app/plainnotes/Store.kt`
 
-<a id="androidappsrcmainjavaappghostlinestorekt"></a>
+<a id="androidappsrcmainjavaappplainnotesstorekt"></a>
 
 ```kotlin
-package app.ghostline
+package app.plainnotes
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
@@ -5054,12 +5226,14 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
-// Rooms and chat history, saved as files in the app's private storage, each encrypted with an
-// AES key that lives in the Android Keystore and can't be exported.
-class Store(context: Context) {
+// Rooms and chat history, saved as files in the app's private storage, each encrypted with
+// AES-GCM. The key is either one that lives in the Android Keystore and can't be exported, or,
+// with the Notes disguise on, a data key that only exists once the phrase and PIN unwrap it.
+class Store(context: Context, dataKey: SecretKey? = null) {
     private val dir = File(context.filesDir, "data").apply { mkdirs() }
-    private val key: SecretKey = loadKey()
+    private val key: SecretKey = dataKey ?: loadKey()
 
     private fun loadKey(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -5079,20 +5253,26 @@ class Store(context: Context) {
     fun read(name: String): String? {
         val f = File(dir, name)
         if (!f.exists()) return null
-        return try {
-            val bytes = f.readBytes()
-            val c = Cipher.getInstance("AES/GCM/NoPadding")
-            c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bytes, 0, 12))
-            String(c.doFinal(bytes, 12, bytes.size - 12))
-        } catch (e: Exception) {
-            Log.e("Store", "could not read $name", e)
+        return open(f.readBytes()) ?: run {
+            Log.e("Notes", "could not read $name")
             null
         }
     }
 
+    // null if this key didn't encrypt it
+    private fun open(bytes: ByteArray): String? = try {
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bytes, 0, 12))
+        String(c.doFinal(bytes, 12, bytes.size - 12))
+    } catch (e: Exception) {
+        null
+    }
+
     fun write(name: String, text: String) {
         val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.ENCRYPT_MODE, key) // the Keystore picks a fresh random IV
+        // the Keystore picks a fresh random IV itself and refuses one from us
+        if (key is SecretKeySpec) c.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, Crypto.randomBytes(12)))
+        else c.init(Cipher.ENCRYPT_MODE, key)
         val out = c.iv + c.doFinal(text.toByteArray())
         val tmp = File(dir, "$name.tmp")
         tmp.writeBytes(out)
@@ -5103,8 +5283,20 @@ class Store(context: Context) {
         File(dir, name).delete()
     }
 
+    // Re-encrypts with this store's key every file that `from` can open. Files already on this key
+    // are left alone, so after an interruption it can simply be run again. The disguise's own
+    // settings stay on the Keystore key, since they're needed before anything is unlocked.
+    fun rekey(from: Store) {
+        for (f in dir.listFiles().orEmpty()) {
+            if (f.name == Lock.FILE || f.name.endsWith(".tmp")) continue
+            val bytes = f.readBytes()
+            if (open(bytes) != null) continue
+            from.open(bytes)?.let { write(f.name, it) }
+        }
+    }
+
     companion object {
-        private const val ALIAS = "ghostline-store"
+        private const val ALIAS = "notes-store"
     }
 }
 ```
@@ -5333,12 +5525,12 @@ class Store(context: Context) {
 ```
 
 
-## `android/app/src/test/java/app/ghostline/CryptoTest.kt`
+## `android/app/src/test/java/app/plainnotes/CryptoTest.kt`
 
-<a id="androidappsrctestjavaappghostlinecryptotestkt"></a>
+<a id="androidappsrctestjavaappplainnotescryptotestkt"></a>
 
 ```kotlin
-package app.ghostline
+package app.plainnotes
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -5409,6 +5601,42 @@ class CryptoTest {
         assertEquals("KQDMWP", Pairing.normalizeCode("kqd-mwp "))
         assertEquals("KQD-MWP", Pairing.formatCode("KQDMWP"))
     }
+}
+```
+
+
+## `android/app/src/test/java/app/plainnotes/LockTest.kt`
+
+<a id="androidappsrctestjavaappplainnoteslocktestkt"></a>
+
+```kotlin
+package app.plainnotes
+
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+import javax.crypto.spec.SecretKeySpec
+
+// The data key the disguise keeps is only usable with both the phrase and the PIN.
+class LockTest {
+    private val key = SecretKeySpec(Crypto.randomBytes(32), "AES")
+    private val salt = Crypto.randomBytes(16)
+    private val wrapped = Lock.wrap(key, "blue kettle", "4821", salt)
+
+    @Test fun unwrapsWithPhraseAndPin() =
+        assertArrayEquals(key.encoded, Lock.unwrap(wrapped, "blue kettle", "4821", salt)!!.encoded)
+
+    @Test fun phraseIgnoresCaseAndSpacing() =
+        assertArrayEquals(key.encoded, Lock.unwrap(wrapped, "  Blue   KETTLE ", "4821", salt)!!.encoded)
+
+    @Test fun rejectsWrongPin() = assertNull(Lock.unwrap(wrapped, "blue kettle", "4822", salt))
+
+    @Test fun rejectsWrongPhrase() = assertNull(Lock.unwrap(wrapped, "red kettle", "4821", salt))
+
+    @Test fun rejectsOtherSalt() = assertNull(Lock.unwrap(wrapped, "blue kettle", "4821", Crypto.randomBytes(16)))
+
+    @Test fun normalizes() = assertEquals("blue kettle", Lock.normalize("\tBlue \n Kettle  "))
 }
 ```
 

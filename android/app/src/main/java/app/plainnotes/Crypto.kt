@@ -1,4 +1,4 @@
-package app.ghostline
+package app.plainnotes
 
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger

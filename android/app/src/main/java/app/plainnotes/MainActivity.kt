@@ -1,4 +1,4 @@
-package app.ghostline
+package app.plainnotes
 
 import android.Manifest
 import android.app.Activity
@@ -19,6 +19,7 @@ import android.text.InputFilter
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
+import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -48,6 +49,7 @@ import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import java.text.DateFormat
 import java.util.Date
+import kotlin.concurrent.thread
 
 class MainActivity : Activity(), HubUi {
     private enum class Screen { NOTES, PIN, HOME, PAIR, ROOM, DISGUISE }
@@ -56,6 +58,9 @@ class MainActivity : Activity(), HubUi {
     private var locked = false // showing the Notes disguise; Ghostline isn't connected
     private var disguiseEditing = false
     private var focusNotes = false
+    private var pendingPhrase: String? = null // the phrase note that led to the PIN screen
+    private var working = false // re-encrypting the rooms; the hub is stopped meanwhile
+    private var started = false
     private var hub: Hub? = null
     private lateinit var audio: CallAudio
     private lateinit var egl: EglBase
@@ -118,14 +123,17 @@ class MainActivity : Activity(), HubUi {
 
     override fun onStart() {
         super.onStart()
+        started = true
         hub?.setForeground(true)
     }
 
     override fun onStop() {
+        started = false
         hub?.setForeground(false)
-        // With the disguise on, leaving the app locks it again, unless a call is going on.
+        // With the disguise on, leaving the app locks it again, unless a call is going on. While
+        // re-encrypting it waits, and locks once that's done.
         val call = view?.call
-        if (lock.enabled && !locked && (call == null || !inCall(call))) relock()
+        if (lock.enabled && !locked && !working && (call == null || !inCall(call))) relock()
         else if (screen == Screen.PIN) show(Screen.NOTES)
         super.onStop()
     }
@@ -133,12 +141,15 @@ class MainActivity : Activity(), HubUi {
     private fun unlock() {
         hideKeyboard()
         locked = false
+        pendingPhrase = null
         startHub()
         show(Screen.HOME)
     }
 
     private fun relock() {
         locked = true
+        pendingPhrase = null
+        lock.relock()
         hub?.close()
         hub = null
         view = null
@@ -148,7 +159,6 @@ class MainActivity : Activity(), HubUi {
         callBar.visibility = View.GONE
         callScreen.visibility = View.GONE
         setCallFullScreen(false)
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         show(Screen.NOTES)
     }
 
@@ -186,7 +196,7 @@ class MainActivity : Activity(), HubUi {
         hub = null
         val origin = server()
         if (origin.isEmpty()) return
-        hub = Hub(this, origin, this, audio, egl, remoteView, localView).also { it.start() }
+        hub = Hub(this, origin, this, audio, egl, remoteView, localView, lock.dataKey).also { it.start() }
     }
 
     override fun onView(view: HubView) {
@@ -222,11 +232,22 @@ class MainActivity : Activity(), HubUi {
         messages = null
         content.removeAllViews()
         setBars(light = s == Screen.NOTES || s == Screen.PIN)
+        keepScreenOn()
         if (s == Screen.ROOM) content.addView(buildRoom())
         render()
     }
 
     private fun render() {
+        if (working) {
+            rebuildIfChanged("working") {
+                column(pad = 32).apply {
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(BG)
+                    addView(text("Encrypting your rooms…", 16f, MUTED).apply { gravity = Gravity.CENTER })
+                }
+            }
+            return
+        }
         when (screen) {
             Screen.NOTES -> rebuildIfChanged("notes|" + notes()) { buildNotes() }
             Screen.PIN -> rebuildIfChanged("pin") { buildPin() }
@@ -271,7 +292,7 @@ class MainActivity : Activity(), HubUi {
         if (server().isEmpty()) {
             val box = column(pad = 20)
             box.addView(text("Enter your Ghostline server to start.", 15f, MUTED).spaced(0, 8))
-            val field = field("https://ghostline-xxxx.onrender.com", "")
+            val field = field("https://your-server.example.com", "")
             field.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             box.addView(field)
             box.addView(button("Save", primary = true) { saveServer(field.text.toString()) }.spaced(12, 0))
@@ -417,6 +438,7 @@ class MainActivity : Activity(), HubUi {
         if (t.isEmpty()) return
         input.setText("")
         if (lock.isPhrase(t)) {
+            pendingPhrase = t
             show(Screen.PIN)
             return
         }
@@ -446,12 +468,39 @@ class MainActivity : Activity(), HubUi {
             background = rounded(Color.WHITE, 12, N_LINE)
             setPadding(dp(14), dp(14), dp(14), dp(14))
         }
-        val open = {
-            if (lock.checkPin(field.text.toString())) unlock() else { hideKeyboard(); show(Screen.NOTES) }
+        lateinit var openButton: Button
+        // Unwrapping the data key takes a moment, so it runs off the main thread.
+        val open: () -> Unit = open@{
+            if (!field.isEnabled) return@open
+            val phrase = pendingPhrase.orEmpty()
+            val pin = field.text.toString()
+            field.isEnabled = false
+            openButton.isEnabled = false
+            openButton.text = "Opening…"
+            thread {
+                val ok = try {
+                    lock.unlock(phrase, pin)
+                } catch (e: Exception) {
+                    Log.e("Notes", "unlock failed", e)
+                    false
+                }
+                runOnUiThread {
+                    if (ok && screen == Screen.PIN && started) {
+                        unlock()
+                    } else {
+                        lock.relock() // also if they left while it was opening
+                        if (screen == Screen.PIN) {
+                            hideKeyboard()
+                            show(Screen.NOTES)
+                        }
+                    }
+                }
+            }
         }
         field.setOnEditorActionListener { _, _, e -> if (e?.action != KeyEvent.ACTION_UP) open(); true }
         root.addView(field, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(28) })
-        root.addView(button("Open", primary = true) { open() }.apply { background = rounded(N_ACCENT, 14) }.spaced(14, 0))
+        openButton = button("Open", primary = true) { open() }.apply { background = rounded(N_ACCENT, 14) }
+        root.addView(openButton.spaced(14, 0))
         root.addView(text("Cancel", 15f, N_MUTED).apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(14), 0, dp(14))
@@ -485,15 +534,19 @@ class MainActivity : Activity(), HubUi {
         if (lock.enabled && !disguiseEditing) {
             body.addView(text(
                 "On. Ghostline opens as a Notes app. To get in, add a note that is your secret phrase, then enter your PIN.\n\n" +
+                    "Your rooms are encrypted with a key that only your phrase and PIN can unlock. " +
                     "It locks again whenever you leave the app, except during a call. While locked you are offline, " +
                     "so messages arrive when you next open it.",
                 15f, MUTED,
             ).apply { setLineSpacing(0f, 1.15f) })
             body.addView(button("Change phrase and PIN") { disguiseEditing = true; render() }.spaced(20, 0))
             body.addView(button("Turn off", danger = true) {
-                confirm("Turn off the disguise?", "Ghostline will open normally again.", "Turn off") {
-                    lock.disable()
-                    render()
+                confirm(
+                    "Turn off the disguise?",
+                    "Ghostline will open normally again, and your rooms will no longer need the PIN to be read.",
+                    "Turn off",
+                ) {
+                    rekeying({ lock.disable() }) { show(Screen.DISGUISE) }
                 }
             }.spaced(10, 0))
             return scroll(root)
@@ -501,7 +554,8 @@ class MainActivity : Activity(), HubUi {
 
         body.addView(text(
             "Ghostline will open as a Notes app. Typing your secret phrase as a new note asks for your PIN, and the right PIN opens Ghostline.\n\n" +
-                "Pick a phrase you would never write as a real note. If you forget it, the only way back in is to clear the app's data, which deletes your rooms.",
+                "Your rooms will be encrypted with a key that only your phrase and PIN unlock. Pick a phrase you would never write as a real note. " +
+                "If you forget either one, nobody can recover your rooms; the only way back in is to clear the app's data, which deletes them.",
             15f, MUTED,
         ).apply { setLineSpacing(0f, 1.15f) })
         val phrase = field("Secret phrase", "").apply {
@@ -527,14 +581,50 @@ class MainActivity : Activity(), HubUi {
                 !Regex("^\\d{4,12}$").matches(p) -> toast("The PIN needs 4 to 12 digits.")
                 p != again.text.toString() -> toast("The PINs don't match.")
                 else -> {
-                    lock.set(phrase.text.toString(), p)
-                    hideKeyboard()
-                    toast("Disguise on. It takes effect when you leave the app.")
-                    show(Screen.HOME)
+                    val ph = phrase.text.toString()
+                    val changing = lock.enabled
+                    rekeying({ lock.set(ph, p) }) {
+                        toast(if (changing) "Phrase and PIN changed." else "Disguise on. It takes effect when you leave the app.")
+                        show(Screen.HOME)
+                    }
                 }
             }
         }.spaced(16, 0))
         return scroll(root)
+    }
+
+    // Re-encrypting must not race the hub's own saves, so the hub is stopped while it runs.
+    private fun rekeying(work: () -> Unit, done: () -> Unit) {
+        val call = view?.call
+        if (call != null && call.state != CallState.IDLE) {
+            toast("Finish the call first.")
+            return
+        }
+        hideKeyboard()
+        val h = hub
+        hub = null
+        view = null
+        h?.close()
+        working = true
+        render()
+        thread {
+            h?.awaitClosed()
+            val ok = try {
+                work()
+                true
+            } catch (e: Exception) {
+                Log.e("Notes", "re-encrypting failed", e)
+                false
+            }
+            runOnUiThread {
+                working = false
+                if (!ok) toast("Couldn't finish. Please try again.")
+                if (!started && lock.enabled) relock() else {
+                    startHub()
+                    done()
+                }
+            }
+        }
     }
 
     // Light bars for the Notes disguise, dark ones for Ghostline.
@@ -1115,10 +1205,17 @@ class MainActivity : Activity(), HubUi {
         flipBtn.isEnabled = c.myVideo
         flipBtn.alpha = if (c.myVideo) 1f else 0.35f
         setCallFullScreen(full)
-        if (c.state == CallState.IDLE) {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
+        keepScreenOn()
+    }
+
+    // During a call, and while pairing: the screen timing out would lock the app (with the disguise
+    // on) and so break off the pairing.
+    private fun keepScreenOn() {
+        val c = view?.call
+        if (screen == Screen.PAIR || (c != null && c.state != CallState.IDLE)) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 

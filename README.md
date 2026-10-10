@@ -66,12 +66,21 @@ matter), then enter the PIN. A wrong PIN goes back to the notes without saying a
 
 - It locks again whenever you leave the app, except during a call. While it's locked you're offline,
   so the other person sees you as offline and messages arrive the next time you open it.
-- The phrase and PIN are stored only as salted PBKDF2 hashes in the Keystore-encrypted store. The
-  note box turns off keyboard learning, so the phrase isn't saved as a suggestion.
-- It only hides the app from a casual look at the phone. Android's app settings still show the
-  package name `app.ghostline`, and anyone who can inspect the phone with developer tools can find
-  it. If you forget the phrase or PIN, the only way back in is to clear the app's data, which
-  deletes your rooms.
+- Your rooms are encrypted with a random data key that is stored only wrapped by a key derived
+  from the phrase and PIN (PBKDF2), so without both the files can't be read, even by the app.
+  A wrong PIN fails to unwrap it; no hash of the PIN is stored. The phrase has its own quicker
+  salted hash so a note can be recognised as it's added. Changing the PIN only re-wraps the key;
+  turning the disguise off moves the data back to the Keystore key.
+- The note box turns off keyboard learning, so the phrase isn't saved as a suggestion.
+- Nothing the phone shows names Ghostline: the package is `app.plainnotes`, and the Keystore alias,
+  log tag, call track names and stored file names are neutral too. The screens you see once
+  unlocked, and the protocol constants shared with the web app, still say Ghostline, so someone
+  who unpacks the APK can tell what it is.
+- If you forget the phrase or PIN, nobody can recover your rooms. The only way back in is to
+  clear the app's data, which deletes them.
+- Your server's address is still visible to your network, in DNS and the TLS handshake, even over
+  HTTPS. Give the server a neutral name, since an `onrender.com` subdomain is set from the
+  service's name when it's created.
 
 ## Hiding IP addresses (TURN relay)
 

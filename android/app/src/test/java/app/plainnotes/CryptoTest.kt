@@ -1,4 +1,4 @@
-package app.ghostline
+package app.plainnotes
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

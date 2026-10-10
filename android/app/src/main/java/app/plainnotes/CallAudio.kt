@@ -1,4 +1,4 @@
-package app.ghostline
+package app.plainnotes
 
 import android.content.Context
 import android.media.AudioDeviceInfo
