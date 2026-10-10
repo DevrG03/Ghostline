@@ -14,8 +14,8 @@ Not listed (generated, binary, or a lockfile, so not hand-written source): `andr
 - [`public/style.css`](#publicstylecss) — 190 lines
 - [`public/app.js`](#publicappjs) — 1294 lines
 - [`test/server.test.js`](#testservertestjs) — 130 lines
-- [`android/.gitignore`](#androidgitignore) — 8 lines
-- [`android/app/build.gradle.kts`](#androidappbuildgradlekts) — 39 lines
+- [`android/.gitignore`](#androidgitignore) — 9 lines
+- [`android/app/build.gradle.kts`](#androidappbuildgradlekts) — 59 lines
 - [`android/app/src/main/AndroidManifest.xml`](#androidappsrcmainandroidmanifestxml) — 39 lines
 - [`android/app/src/main/java/app/plainnotes/CallAudio.kt`](#androidappsrcmainjavaappplainnotescallaudiokt) — 40 lines
 - [`android/app/src/main/java/app/plainnotes/Crypto.kt`](#androidappsrcmainjavaappplainnotescryptokt) — 146 lines
@@ -47,7 +47,7 @@ Not listed (generated, binary, or a lockfile, so not hand-written source): `andr
 - [`android/gradle.properties`](#androidgradleproperties) — 4 lines
 - [`android/settings.gradle.kts`](#androidsettingsgradlekts) — 16 lines
 
-**40 files, 5319 lines.**
+**40 files, 5340 lines.**
 
 
 ## `server.js`
@@ -2222,6 +2222,7 @@ local.properties
 *.aab
 .idea/
 *.iml
+keystore.properties
 ```
 
 
@@ -2230,9 +2231,17 @@ local.properties
 <a id="androidappbuildgradlekts"></a>
 
 ```kotlin
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// Release signing comes from android/keystore.properties, which is kept out of git. Without it
+// the release build is left unsigned.
+val signing = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { f ->
+    Properties().apply { f.inputStream().use { load(it) } }
 }
 
 android {
@@ -2247,9 +2256,21 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        if (signing != null) {
+            create("release") {
+                storeFile = file(signing.getProperty("storeFile"))
+                storePassword = signing.getProperty("storePassword")
+                keyAlias = signing.getProperty("keyAlias")
+                keyPassword = signing.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (signing != null) signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
