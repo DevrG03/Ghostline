@@ -411,9 +411,13 @@ class Room {
   flushOutbox() {
     let changed = false;
     for (const m of this.msgs) {
-      if (m.mine && m.status === 'pending' && this.sendPeer({ t: 'msg', id: m.id, text: m.text, ttl: m.ttl, ts: m.ts })) {
-        m.status = 'sent';
-        changed = true;
+      // Resend anything not yet acknowledged: a message "sent" into a connection that had
+      // silently died is never delivered otherwise. The receiver ignores duplicates by id.
+      if (m.mine && m.status !== 'delivered' && this.sendPeer({ t: 'msg', id: m.id, text: m.text, ttl: m.ttl, ts: m.ts })) {
+        if (m.status === 'pending') {
+          m.status = 'sent';
+          changed = true;
+        }
       }
     }
     if (changed) this.saveMsgs();

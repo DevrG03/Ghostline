@@ -1,13 +1,16 @@
 # Ghostline
 
-Private, ephemeral chat + voice + video for two people, in the browser.
+Private chat, voice and video between two people: in the browser, or with the Android app
+in [android/](android/).
 
 ## Run locally
 
     npm install
     npm start            # http://127.0.0.1:3000
 
-Open the page, click **Create private room**, and send the invite link to one person.
+Open the page and tap **New room**. You get a 6-letter code like `KQD-MWP`; the other person
+taps **Join with code** and types it. The room is then saved on both devices (and works between
+the website and the Android app) until one of you taps **Leave room**.
 
 ## Use from phones
 
@@ -19,19 +22,26 @@ Camera, microphone and the encryption APIs only work over **HTTPS**. Pick one:
 
 ## What is protected
 
-- No accounts, no database, no logs, no cookies, no localStorage. Refresh/close = gone.
-- The room secret lives only in the link's `#fragment`, which browsers never send to the server.
-  It is removed from the address bar as soon as the page opens.
-- All signaling is AES-256-GCM encrypted with a key derived from that secret, so the server
-  cannot read or tamper with the handshake (no man-in-the-middle).
+- No accounts, no server database, no logs, no cookies.
+- **Pairing:** the code is single use, expires after 10 minutes, and join attempts are limited
+  per network. The first person to enter it joins. The two devices then run an ECDH key exchange,
+  so the room secret never crosses the network.
+- **The server sees the code**, so a malicious server could try to sit in the middle of that
+  exchange. Comparing the safety code once (below) rules this out.
+- **Saved rooms:** rooms and chat history are stored only on each device, encrypted (IndexedDB with
+  a non-exportable key on the web; the Android Keystore in the app). Messages typed while the
+  other person is offline wait on your device and are delivered later (✓✓ when they arrive).
+- All signaling is AES-256-GCM encrypted with a key derived from the room secret, so the server
+  cannot read or tamper with the handshake.
 - Chat and calls flow directly device-to-device over WebRTC (DTLS/SRTP).
-- Safety code: compare it out loud; matching codes confirm nobody is in the middle. Press
-  **Mark verified** and you'll be warned if the code ever changes (e.g. someone else used the link).
+- Safety code: compare it out loud; matching codes confirm nobody is in the middle. Each device
+  keeps one key per room, so the code stays the same across reconnects. Mark it verified and
+  you'll be warned if it ever changes.
 - Replayed or reordered signaling messages are rejected.
 - Chat messages are padded to 256-byte blocks so their encrypted size doesn't reveal their exact length.
 - Optional disappearing messages, "Clear" on both sides, page blanks itself in the app switcher
   (best effort: some phones take the snapshot before the page can blank itself).
-- The server survives malformed input and enforces connection, join-timeout and rate limits.
+- The server survives malformed input and enforces connection, rate and pairing-attempt limits.
 
 ## Hiding IP addresses (TURN relay)
 
@@ -67,5 +77,5 @@ TURN server sees the same. If you use `cloudflared`, Cloudflare sees it too.
 - The keyboard app: third-party keyboards can log what you type. Use the system keyboard.
 - Browser history / sync: use a private (incognito) tab.
 - The other person screenshotting or recording.
-- Anyone who gets the invite link: they can join if a seat is free. Share it over a trusted
-  channel, and verify the safety code.
+- Anyone who gets a pairing code before the intended person: share it over a trusted channel,
+  and verify the safety code.

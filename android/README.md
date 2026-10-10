@@ -1,6 +1,6 @@
 # Ghostline for Android
 
-A small native app that joins the same rooms as the web version, using the same invite links,
+A small native app that works with the web version: same 6-letter pairing codes, saved rooms,
 encryption and safety code. Chat, voice calls and full-screen video calls.
 
 Why it exists: on some phones (seen on a moto g 5G running LineageOS 15), every browser asks the
@@ -20,8 +20,11 @@ Needs JDK 17 and the Android SDK (`brew install --cask android-commandlinetools`
 
 ## Use
 
-- **Join:** paste an invite link and tap Join, or use "Share" on a link in another app and pick Ghostline.
-- **Create:** enter your server address (e.g. `https://ghostline-xxxx.onrender.com`) and tap Create.
+- **First run:** enter your server address (e.g. `https://ghostline-xxxx.onrender.com`). Change it
+  later by tapping the server line at the bottom of the room list.
+- **New room** shows a 6-letter code; the other person taps **Join with code** and types it.
+- Rooms stay in the list until you tap **⋯ → Leave room** (you're asked first). Back just returns
+  to the list. During a call, the chat button shrinks the call to a bar so you can keep chatting.
 
 ## Calls
 
@@ -29,12 +32,12 @@ Needs JDK 17 and the Android SDK (`brew install --cask android-commandlinetools`
   flip between front and back cameras during a call. The camera is fully released when it's off.
 - Video calls are full screen. Tap the other person's video to switch between filling the screen
   and showing the whole picture.
-- Back asks before leaving, so a stray swipe doesn't end the call and lose the room.
 
 ## Privacy
 
-Same model as the web app: the room key lives only in the invite link, signaling is AES-256-GCM
-encrypted, and chat and calls go directly between devices. The app stores only the server address.
+Same model as the web app: the room secret comes from an ECDH exchange during pairing, signaling
+is AES-256-GCM encrypted, and chat and calls go directly between devices. Rooms and history are
+stored in the app's private storage, encrypted with a key held in the Android Keystore.
 Screenshots, screen recording and the app-switcher preview are blocked, and app backups are off.
 
 ## Limits

@@ -1,6 +1,17 @@
 package app.ghostline
 
 import java.io.ByteArrayOutputStream
+import java.math.BigInteger
+import java.security.KeyFactory
+import java.security.KeyPair
+import java.security.KeyPairGenerator
+import java.security.PrivateKey
+import java.security.interfaces.ECPublicKey
+import java.security.spec.ECFieldFp
+import java.security.spec.ECGenParameterSpec
+import java.security.spec.ECPoint
+import java.security.spec.ECPublicKeySpec
+import javax.crypto.KeyAgreement
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -90,23 +101,46 @@ fun safetyCode(localSdp: String?, remoteSdp: String?): String? {
     }
 }
 
-data class Invite(val origin: String, val secret: String) {
-    val link get() = "$origin/#$secret"
+// Pairing with a 6-letter code: each device sends a fresh P-256 ECDH public key; both derive
+// the same room secret. Must match the pairing code in public/app.js.
+object Pairing {
+    const val CODE_LENGTH = 6
 
-    companion object {
-        private val SECRET = Regex("^[A-Za-z0-9_-]{22,}$")
-        private val LINK = Regex("^(https?)://([A-Za-z0-9.-]+)(:\\d+)?(/[^#\\s]*)?#([A-Za-z0-9_-]{22,})$")
+    fun newKeyPair(): KeyPair =
+        KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
 
-        fun parse(text: String): Invite? {
-            val m = LINK.find(text.trim()) ?: return null
-            val (scheme, host, port, _, secret) = m.destructured
-            if (!SECRET.matches(secret)) return null
-            return Invite("$scheme://$host$port", secret)
+    private fun pad32(n: BigInteger): ByteArray {
+        val b = n.toByteArray()
+        return when {
+            b.size == 32 -> b
+            b.size > 32 -> b.copyOfRange(b.size - 32, b.size)
+            else -> ByteArray(32 - b.size) + b
         }
-
-        fun find(text: String): Invite? =
-            Regex("https?://\\S+#[A-Za-z0-9_-]{22,}").find(text)?.value?.let { parse(it) }
-
-        fun create(origin: String) = Invite(origin, Crypto.b64u(Crypto.randomBytes(32)))
     }
+
+    // uncompressed point, the same as WebCrypto's "raw" export
+    fun rawPublic(key: ECPublicKey): ByteArray = byteArrayOf(4) + pad32(key.w.affineX) + pad32(key.w.affineY)
+
+    fun roomSecret(myPrivate: PrivateKey, myPublic: ECPublicKey, theirRaw: ByteArray): String {
+        require(theirRaw.size == 65 && theirRaw[0] == 4.toByte()) { "bad public key" }
+        val params = myPublic.params
+        val x = BigInteger(1, theirRaw.copyOfRange(1, 33))
+        val y = BigInteger(1, theirRaw.copyOfRange(33, 65))
+        val p = (params.curve.field as ECFieldFp).p
+        require(x < p && y < p && y.modPow(BigInteger.TWO, p) == (x.pow(3) + params.curve.a * x + params.curve.b).mod(p)) {
+            "point not on curve"
+        }
+        val theirs = KeyFactory.getInstance("EC").generatePublic(ECPublicKeySpec(ECPoint(x, y), params))
+        val shared = KeyAgreement.getInstance("ECDH").run {
+            init(myPrivate)
+            doPhase(theirs, true)
+            generateSecret()
+        }
+        // bind the secret to both public keys, in a fixed order
+        val pubs = listOf(Crypto.hex(rawPublic(myPublic)), Crypto.hex(theirRaw)).sorted().joinToString("|")
+        return Crypto.b64u(Crypto.hkdf(shared, "ghostline-v2".toByteArray(), "room-secret|$pubs".toByteArray(), 32))
+    }
+
+    fun normalizeCode(text: String) = text.uppercase().filter { it in 'A'..'Z' }
+    fun formatCode(code: String) = if (code.length > 3) code.take(3) + "-" + code.drop(3) else code
 }

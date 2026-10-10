@@ -31,13 +31,42 @@ class CryptoTest {
         safetyCode("v=0\r\na=fingerprint:sha-256 AA:BB:CC\r\n", "a=fingerprint:sha-256 11:22:33\r\n"),
     )
 
-    @Test fun parsesInviteLinks() {
-        val i = Invite.parse("https://ghostline.onrender.com/#$secret")!!
-        assertEquals("https://ghostline.onrender.com", i.origin)
-        assertEquals(secret, i.secret)
-        assertEquals("http://localhost:3000", Invite.parse("http://localhost:3000/#$secret")!!.origin)
-        assertEquals(i, Invite.find("Join me: https://ghostline.onrender.com/#$secret thanks"))
-        assertNull(Invite.parse("https://example.com/#short"))
-        assertNull(Invite.parse("ftp://example.com/#$secret"))
+    // Keys and expected secret produced by the web app's pairing code path (WebCrypto).
+    @Test fun pairingSecretMatchesWeb() {
+        val priv = java.security.KeyFactory.getInstance("EC")
+            .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(java.util.Base64.getDecoder().decode("MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgB5PTdZ7yRlI6T6GNvRxS+5igBELI3umC4HK0dcVtaHahRANCAASATIZ+wazmXKnZLIbM0yF5qoLIa4LqlxnEiq4+9km9vdKYDl6pjuX8p2oTrEYVVnmWHNUdqy09sxCMPgrkvNC9")))
+        val aRaw = Crypto.unb64u("BIBMhn7BrOZcqdkshszTIXmqgshrguqXGcSKrj72Sb290pgOXqmO5fynahOsRhVWeZYc1R2rLT2zEIw-CuS80L0")
+        val params = (Pairing.newKeyPair().public as java.security.interfaces.ECPublicKey).params
+        val aPub = java.security.KeyFactory.getInstance("EC").generatePublic(
+            java.security.spec.ECPublicKeySpec(
+                java.security.spec.ECPoint(java.math.BigInteger(1, aRaw.copyOfRange(1, 33)), java.math.BigInteger(1, aRaw.copyOfRange(33, 65))),
+                params,
+            ),
+        ) as java.security.interfaces.ECPublicKey
+        assertEquals("BIBMhn7BrOZcqdkshszTIXmqgshrguqXGcSKrj72Sb290pgOXqmO5fynahOsRhVWeZYc1R2rLT2zEIw-CuS80L0", Crypto.b64u(Pairing.rawPublic(aPub)))
+        assertEquals("ZrpW9-P23rJY2xyFnsl9gzedxmgJUexhmPWbKat0UkU", Pairing.roomSecret(priv, aPub, Crypto.unb64u("BBIpxgNL2AjJj9nxccN_M_iPrbUAgyCnmlpj0-kGyprbFoLmjjdduCgbdv9saEp9XED5RhOCDzYsuLMNsDPkQ9c")))
+    }
+
+    @Test fun pairingBothSidesAgree() {
+        val a = Pairing.newKeyPair()
+        val b = Pairing.newKeyPair()
+        val pa = a.public as java.security.interfaces.ECPublicKey
+        val pb = b.public as java.security.interfaces.ECPublicKey
+        assertEquals(
+            Pairing.roomSecret(a.private, pa, Pairing.rawPublic(pb)),
+            Pairing.roomSecret(b.private, pb, Pairing.rawPublic(pa)),
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun pairingRejectsPointOffCurve() {
+        val a = Pairing.newKeyPair()
+        val bad = ByteArray(65).also { it[0] = 4; it[64] = 1 }
+        Pairing.roomSecret(a.private, a.public as java.security.interfaces.ECPublicKey, bad)
+    }
+
+    @Test fun codes() {
+        assertEquals("KQDMWP", Pairing.normalizeCode("kqd-mwp "))
+        assertEquals("KQD-MWP", Pairing.formatCode("KQDMWP"))
     }
 }
