@@ -3,6 +3,9 @@
 Private chat, voice and video between two people: in the browser, or with the Android app
 in [android/](android/).
 
+**[Download for Android](https://github.com/DevrG03/Ghostline/releases/latest)**: the latest
+signed APK (Android 8.0 or newer), with install steps and checksums on the release page.
+
 > The complete source of every file is also collected in one place, verbatim, in
 > [SOURCE.md](SOURCE.md).
 
